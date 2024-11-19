@@ -1,0 +1,20 @@
+[package]
+name = "yaxiwm"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "yaxiwm"
+path = "src/yaxiwm/main.rs"
+
+[[bin]]
+name = "yaxc"
+path = "src/yaxc/main.rs"
+
+[lib]
+name = "ipc"
+path = "src/ipc/lib.rs"
+
+
+[dependencies]
+yaxi = { path = "../xrs", features = ["xinerama", "ewmh"] }
