@@ -51,13 +51,36 @@ impl<T> Node<T> where T: Clone + PartialEq {
         }
     }
 
-    pub fn insert(&mut self, value: T) {
-        let (_, node) = self.deepest(0);
+    fn manual(&mut self, point: &T) -> Option<&mut Node<T>> {
+        match self {
+            Node::Leaf { value } => (value == point).then(|| self),
+            Node::Internal { left, right } => {
+                left.manual(&point).or(right.manual(&point))
+            },
+        }
+    }
 
-        *node = Node::Internal {
-            left: Box::new(node.clone()),
-            right: Box::new(Node::Leaf { value }),
-        };
+    pub fn get_node(&mut self, mode: Mode<T>) -> Option<&mut Node<T>> {
+        match mode {
+            Mode::Manual { point } => {
+                self.manual(&point)
+            },
+            Mode::Deepest => {
+                let (_, node) = self.deepest(0);
+
+                Some(node)
+            },
+            Mode::Balance => None,
+        }
+    }
+
+    pub fn insert(&mut self, value: T, mode: Mode<T>) {
+        if let Some(node) = self.get_node(mode) {
+            *node = Node::Internal {
+                left: Box::new(node.clone()),
+                right: Box::new(Node::Leaf { value }),
+            };
+        }
     }
 }
 

@@ -1,6 +1,7 @@
 mod tree;
+mod wm;
 
-use tree::Node;
+use tree::{Node, Mode};
 
 
 fn main() {
@@ -8,15 +9,17 @@ fn main() {
 
     println!("root: {:#?}", root);
 
-    root.insert(420);
+    root.insert(420, Mode::Deepest);
 
     println!("root: {:#?}", root);
 
-    root.insert(69);
+    root.insert(69, Mode::Deepest);
 
     println!("root: {:#?}", root);
 
-    root.insert(1337);
+    root.insert(1337, Mode::Manual {
+        point: 420,
+    });
 
     println!("root: {:#?}", root);
 
