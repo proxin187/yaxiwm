@@ -1,7 +1,9 @@
+mod server;
+mod event;
 mod tree;
 mod wm;
 
-use tree::{Node, Mode};
+use tree::{Node, Mode, Split};
 
 
 fn main() {
@@ -9,15 +11,15 @@ fn main() {
 
     println!("root: {:#?}", root);
 
-    root.insert(420, Mode::Deepest);
+    root.insert(420, Split::Horizontal, Mode::Deepest);
 
     println!("root: {:#?}", root);
 
-    root.insert(69, Mode::Deepest);
+    root.insert(69, Split::Horizontal, Mode::Deepest);
 
     println!("root: {:#?}", root);
 
-    root.insert(1337, Mode::Manual {
+    root.insert(1337, Split::Horizontal, Mode::Manual {
         point: 420,
     });
 
