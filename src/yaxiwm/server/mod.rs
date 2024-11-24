@@ -2,7 +2,10 @@ use crate::event::{Queue, EventType};
 
 use std::os::unix::net::UnixListener;
 use std::sync::Arc;
+use std::io::Read;
 use std::env;
+
+use ipc::Args;
 
 
 pub struct Server {
@@ -22,7 +25,13 @@ impl Server {
 
     pub fn listen(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         for stream in self.listener.incoming() {
-            // TODO: we need some sort of system to serialize and deserialize
+            let mut buffer: Vec<u8> = Vec::new();
+
+            stream?.read_to_end(&mut buffer)?;
+
+            let args: Args = bincode::deserialize(&buffer)?;
+
+            self.events.push(EventType::Config(args))?;
         }
 
         Ok(())

@@ -3,16 +3,17 @@ use yaxi::proto::Event;
 use std::sync::{Mutex, Condvar};
 use std::collections::VecDeque;
 
+use ipc::Args;
+
 macro_rules! lock {
     ($mutex:expr) => {
         $mutex.lock().map_err(|_| Into::<Box<dyn std::error::Error>>::into("failed to lock"))
     }
 }
 
-
 pub enum EventType {
     XEvent(Event),
-    Config(),
+    Config(Args),
 }
 
 pub struct Queue<T> {

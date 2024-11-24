@@ -1,51 +1,57 @@
+use crate::config::Insert;
+use crate::wm::Area;
+
+use yaxi::window::Window;
+
+use ipc::Direction;
 
 
-pub enum Mode<T> {
-    Manual {
-        point: T,
-    },
-    Deepest,
-    Balance,
-}
-
-#[derive(Debug, Clone)]
-pub enum Split {
-    Horizontal,
-    Vertical,
-}
-
-#[derive(Debug, Clone)]
-pub enum Node<T: Clone + PartialEq> {
+#[derive(Clone)]
+pub enum Node {
     Leaf {
-        value: T,
+        window: Window,
     },
     Internal {
-        left: Box<Node<T>>,
-        right: Box<Node<T>>,
-        split: Split,
+        left: Box<Node>,
+        right: Box<Node>,
+        insert: Insert,
     },
 }
 
-impl<T> Node<T> where T: Clone + PartialEq {
-    pub fn root(value: T) -> Node<T> {
-        Node::Leaf { value }
+impl Node {
+    pub fn root(window: Window) -> Node {
+        Node::Leaf { window }
     }
 
-    fn deepest(&mut self, depth: usize) -> (usize, &mut Node<T>) {
+    pub fn partition(&self, area: Area) -> Result<(), Box<dyn std::error::Error>> {
         match self {
-            Node::Leaf { .. } => (depth, self),
-            Node::Internal { left, right, .. } => {
-                let (ld, left) = left.deepest(depth);
-                let (rd, right) = right.deepest(depth);
+            Node::Leaf { window } => {
+                window.mov_resize(area.x, area.y, area.width, area.height)?;
+            },
+            Node::Internal { left, right, insert } => {
+                let factor = insert.ratio.min(100) as f64 / 100.0;
 
-                (ld > rd).then(|| (ld, left)).unwrap_or((rd, right))
+                match insert.dir {
+                    Direction::North | Direction::South => {
+                        left.partition(Area::new(area.x, area.y, area.width, (area.height as f64 * factor) as u16))?;
+
+                        right.partition(Area::new(area.x, area.y + (area.height as f64 * factor) as u16, area.width, area.height - (area.height as f64 * factor) as u16))?;
+                    },
+                    Direction::West | Direction::East => {
+                        left.partition(Area::new(area.x, area.y, (area.width as f64 * factor) as u16, area.height))?;
+
+                        right.partition(Area::new(area.x + (area.width as f64 * factor) as u16, area.y, area.width - (area.width as f64 * factor) as u16, area.height))?;
+                    },
+                }
             },
         }
+
+        Ok(())
     }
 
-    pub fn remove(&mut self, needle: &T) -> bool {
+    pub fn remove(&mut self, needle: &Window) -> bool {
         match self {
-            Node::Leaf { value } => value == needle,
+            Node::Leaf { window } => window == needle,
             Node::Internal { left, right, .. } => {
                 if left.remove(needle) {
                     *self = *right.clone();
@@ -58,35 +64,21 @@ impl<T> Node<T> where T: Clone + PartialEq {
         }
     }
 
-    fn manual(&mut self, point: &T) -> Option<&mut Node<T>> {
+    fn find(&mut self, point: &Window) -> Option<&mut Node> {
         match self {
-            Node::Leaf { value } => (value == point).then(|| self),
+            Node::Leaf { window } => (window == point).then(|| self),
             Node::Internal { left, right, .. } => {
-                left.manual(&point).or(right.manual(&point))
+                left.find(&point).or(right.find(&point))
             },
         }
     }
 
-    pub fn get_node(&mut self, mode: Mode<T>) -> Option<&mut Node<T>> {
-        match mode {
-            Mode::Manual { point } => {
-                self.manual(&point)
-            },
-            Mode::Deepest => {
-                let (_, node) = self.deepest(0);
-
-                Some(node)
-            },
-            Mode::Balance => None,
-        }
-    }
-
-    pub fn insert(&mut self, value: T, split: Split, mode: Mode<T>) {
-        if let Some(node) = self.get_node(mode) {
+    pub fn insert(&mut self, window: Window, insert: Insert, point: &Window) {
+        if let Some(node) = self.find(point) {
             *node = Node::Internal {
                 left: Box::new(node.clone()),
-                right: Box::new(Node::Leaf { value }),
-                split,
+                right: Box::new(Node::Leaf { window }),
+                insert,
             };
         }
     }

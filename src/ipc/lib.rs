@@ -1,23 +1,51 @@
 use serde::{Serialize, Deserialize};
-use clap::Parser;
+use clap::{Parser, Subcommand};
 
 
-#[derive(Serialize, Deserialize)]
-pub enum Node {
+#[derive(Debug, Clone, PartialEq, Subcommand, Serialize, Deserialize)]
+pub enum Direction {
+    North,
+    South,
+    West,
+    East,
+}
+
+#[derive(Clone, Subcommand, Serialize, Deserialize)]
+pub enum NodeCommand {
+    Insert {
+        #[command(subcommand)]
+        dir: Direction,
+
+        #[arg(short, long)]
+        ratio: Option<i8>,
+
+        #[arg(short, long)]
+        toggle: bool,
+    },
+
     Close,
     Kill,
 }
 
-#[derive(Serialize, Deserialize)]
-pub enum Config {
+#[derive(Clone, Subcommand, Serialize, Deserialize)]
+pub enum ConfigCommand {
     PointerFollowsFocus,
     FocusFollowsPointer,
 }
 
-#[derive(Serialize, Deserialize)]
-pub enum Message {
-    Node(Node),
-    Config(Config),
+#[derive(Clone, Subcommand, Serialize, Deserialize)]
+pub enum Command {
+    #[command(subcommand)]
+    Node(NodeCommand),
+
+    #[command(subcommand)]
+    Config(ConfigCommand),
+}
+
+#[derive(Parser, Serialize, Deserialize)]
+pub struct Arguments {
+    #[command(subcommand)]
+    pub command: Command,
 }
 
 

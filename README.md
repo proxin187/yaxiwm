@@ -1,12 +1,11 @@
 # yaxiwm
 
-`yaxiwm` is a tiling window manager where each window is represented as a leaf node as a part of a full binary tree.
+yaxiwm is a manual tiling window manager where each window is represented as a leaf node of a [full binary tree](https://en.wikipedia.org/wiki/Binary_tree#Types_of_binary_trees) and tiled with [binary space partitioning](https://en.wikipedia.org/wiki/Binary_space_partitioning).
 
 ## Features
- - Flexible window layouts, (manual and automatic)
+ - Flexible manual window layouts, (split direction and ratio)
  - Keyboard driven, (mouse is optional)
  - Small and consise code base.
-
 
 ## License
 
