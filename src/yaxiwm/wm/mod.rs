@@ -4,7 +4,7 @@ use crate::tree::Node;
 use crate::startup;
 
 use yaxi::display::{self, Display};
-use yaxi::window::Window;
+use yaxi::window::{Window, WindowKind};
 use yaxi::proto::Event;
 
 use std::sync::Arc;
@@ -33,25 +33,53 @@ impl Area {
 }
 
 pub struct Desktop {
-    clients: Node,
+    clients: Option<Node>,
     area: Area,
 }
 
 impl Desktop {
-    pub fn new(root: Window, area: Area) -> Desktop {
+    pub fn new(area: Area) -> Desktop {
         Desktop {
-            clients: Node::root(root),
+            clients: None,
             area,
         }
     }
 
+    pub fn contains(&self, window: &Window) -> bool {
+        match &self.clients {
+            Some(clients) => clients.contains(window),
+            None => false,
+        }
+    }
+
+    pub fn insert(&mut self, window: Window, insert: Insert, point: &Window) {
+        if let Some(clients) = &mut self.clients {
+            clients.insert(window, insert, point);
+        }
+    }
+
+    pub fn hide(&self) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(clients) = &self.clients {
+            clients.traverse(|window| {
+                window.unmap(WindowKind::Window).map_err(|err| err.into())
+            })?;
+        }
+
+        Ok(())
+    }
+
     pub fn tile(&self) -> Result<(), Box<dyn std::error::Error>> {
-        self.clients.partition(self.area)
+        if let Some(clients) = &self.clients {
+            clients.partition(self.area)?;
+        }
+
+        Ok(())
     }
 }
 
 pub struct Screen {
     desktops: Vec<Desktop>,
+    current: usize,
     area: Area,
 }
 
@@ -59,14 +87,40 @@ impl Screen {
     pub fn new(area: Area) -> Screen {
         Screen {
             desktops: Vec::new(),
+            current: 0,
             area,
         }
+    }
+
+    pub fn contains(&self, window: &Window) -> bool {
+        self.desktops.iter().any(|desktop| desktop.contains(window))
+    }
+
+    pub fn insert(&mut self, window: Window, insert: Insert, point: &Window) {
+        if let Some(desktop) = self.desktops.get_mut(self.current) {
+            desktop.insert(window, insert, point);
+        }
+    }
+
+    pub fn tile(&self) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(desktop) = self.desktops.get(self.current) {
+            desktop.tile()?;
+        }
+
+        for (index, desktop) in self.desktops.iter().enumerate() {
+            if index != self.current {
+                desktop.hide()?;
+            }
+        }
+
+        Ok(())
     }
 }
 
 pub struct WindowManager {
     display: Display,
     root: Window,
+    focus: Window,
     events: Arc<Queue<EventType>>,
     screens: Vec<Screen>,
     config: Configuration,
@@ -79,7 +133,8 @@ impl WindowManager {
 
         Ok(WindowManager {
             display,
-            root,
+            root: root.clone(),
+            focus: root,
             events: Arc::new(Queue::new()),
             screens: Vec::new(),
             config: Configuration::new(),
@@ -96,11 +151,49 @@ impl WindowManager {
         Ok(())
     }
 
+    fn all<F>(&mut self, f: F) -> Result<(), Box<dyn std::error::Error>>
+    where
+        F: Fn(&mut Screen) -> Result<(), Box<dyn std::error::Error>>
+    {
+        for screen in self.screens.iter_mut() {
+            f(screen)?;
+        }
+
+        Ok(())
+    }
+
+    fn focused<F>(&mut self, f: F) -> Result<(), Box<dyn std::error::Error>>
+    where
+        F: Fn(&mut Screen) -> Result<(), Box<dyn std::error::Error>>
+    {
+        for screen in self.screens.iter_mut() {
+            if screen.contains(&self.focus) {
+                f(screen)?;
+
+                return Ok(());
+            }
+        }
+
+        Ok(())
+    }
+
     fn handle_event(&mut self, event: Event) -> Result<(), Box<dyn std::error::Error>> {
         match event {
             Event::MapRequest { window, .. } => {
+                let point = self.focus.clone();
+
+                // TODO: fix this borrowing issue
+                self.focused(|screen| {
+                    let window = self.display.window_from_id(window)?;
+                    let insert = self.config.insert.clone();
+
+                    screen.insert(window, insert, &point);
+
+                    Ok(())
+                })?;
             },
             Event::UnmapNotify { window, .. } => {
+                let window = self.display.window_from_id(window)?;
             },
             _ => {},
         }

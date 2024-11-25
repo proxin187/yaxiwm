@@ -23,6 +23,27 @@ impl Node {
         Node::Leaf { window }
     }
 
+    pub fn contains(&self, needle: &Window) -> bool {
+        match self {
+            Node::Leaf { window } => needle == window,
+            Node::Internal { left, right, .. } => left.contains(needle) || right.contains(needle),
+        }
+    }
+
+    pub fn traverse<F>(&self, mut f: F) -> Result<(), Box<dyn std::error::Error>>
+    where
+        F: Clone + Copy + FnMut(&Window) -> Result<(), Box<dyn std::error::Error>>
+    {
+        match self {
+            Node::Leaf { window } => f(window),
+            Node::Internal { left, right, .. } => {
+                left.traverse(f)?;
+
+                right.traverse(f)
+            },
+        }
+    }
+
     pub fn partition(&self, area: Area) -> Result<(), Box<dyn std::error::Error>> {
         match self {
             Node::Leaf { window } => {
@@ -75,11 +96,18 @@ impl Node {
 
     pub fn insert(&mut self, window: Window, insert: Insert, point: &Window) {
         if let Some(node) = self.find(point) {
-            *node = Node::Internal {
-                left: Box::new(node.clone()),
-                right: Box::new(Node::Leaf { window }),
-                insert,
-            };
+            *node = match insert.dir {
+                Direction::East | Direction::South => Node::Internal {
+                    left: Box::new(node.clone()),
+                    right: Box::new(Node::Leaf { window }),
+                    insert,
+                },
+                Direction::West | Direction::North => Node::Internal {
+                    left: Box::new(Node::Leaf { window }),
+                    right: Box::new(node.clone()),
+                    insert,
+                },
+            }
         }
     }
 }
