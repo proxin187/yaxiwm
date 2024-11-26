@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::io::Read;
 use std::env;
 
-use ipc::Args;
+use ipc::Arguments;
 
 
 pub struct Server {
@@ -29,7 +29,7 @@ impl Server {
 
             stream?.read_to_end(&mut buffer)?;
 
-            let args: Args = bincode::deserialize(&buffer)?;
+            let args: Arguments = bincode::deserialize(&buffer)?;
 
             self.events.push(EventType::Config(args))?;
         }

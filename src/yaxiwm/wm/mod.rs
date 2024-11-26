@@ -1,16 +1,16 @@
-use crate::config::{Configuration, Insert};
+use crate::config::{Configuration, Insert, Padding};
 use crate::event::{Queue, EventType};
 use crate::tree::Node;
 use crate::startup;
 
-use yaxi::display::{self, Display};
+use yaxi::display::{self, Display, Atom};
 use yaxi::window::{Window, WindowKind};
-use yaxi::proto::Event;
+use yaxi::proto::{Event, RevertTo, ClientMessageData};
 
 use std::sync::Arc;
 use std::thread;
 
-use ipc::{Arguments, Command, NodeCommand, ConfigCommand};
+use ipc::{Arguments, Command, NodeCommand, DesktopCommand, ConfigCommand};
 
 
 #[derive(Clone, Copy)]
@@ -58,6 +58,12 @@ impl Desktop {
         }
     }
 
+    pub fn remove(&mut self, window: &Window) {
+        if let Some(clients) = &mut self.clients {
+            clients.remove(window);
+        }
+    }
+
     pub fn hide(&self) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(clients) = &self.clients {
             clients.traverse(|window| {
@@ -68,9 +74,9 @@ impl Desktop {
         Ok(())
     }
 
-    pub fn tile(&self) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn tile(&self, padding: Padding) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(clients) = &self.clients {
-            clients.partition(self.area)?;
+            clients.partition(self.area, padding)?;
         }
 
         Ok(())
@@ -102,9 +108,15 @@ impl Screen {
         }
     }
 
-    pub fn tile(&self) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn remove(&mut self, window: &Window) {
+        if let Some(desktop) = self.desktops.get_mut(self.current) {
+            desktop.remove(window);
+        }
+    }
+
+    pub fn tile(&self, padding: Padding) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(desktop) = self.desktops.get(self.current) {
-            desktop.tile()?;
+            desktop.tile(padding)?;
         }
 
         for (index, desktop) in self.desktops.iter().enumerate() {
@@ -117,6 +129,20 @@ impl Screen {
     }
 }
 
+pub struct Atoms {
+    wm_protocols: Atom,
+    wm_delete: Atom,
+}
+
+impl Atoms {
+    pub fn new(display: &Display) -> Result<Atoms, Box<dyn std::error::Error>> {
+        Ok(Atoms {
+            wm_protocols: display.intern_atom("WM_PROTOCOLS", false)?,
+            wm_delete: display.intern_atom("WM_DELETE_WINDOW", false)?,
+        })
+    }
+}
+
 pub struct WindowManager {
     display: Display,
     root: Window,
@@ -124,12 +150,15 @@ pub struct WindowManager {
     events: Arc<Queue<EventType>>,
     screens: Vec<Screen>,
     config: Configuration,
+    atoms: Atoms,
 }
 
 impl WindowManager {
     pub fn new() -> Result<WindowManager, Box<dyn std::error::Error>> {
         let display = display::open(None)?;
         let root = display.default_root_window()?;
+
+        let atoms = Atoms::new(&display)?;
 
         Ok(WindowManager {
             display,
@@ -138,6 +167,7 @@ impl WindowManager {
             events: Arc::new(Queue::new()),
             screens: Vec::new(),
             config: Configuration::new(),
+            atoms,
         })
     }
 
@@ -151,20 +181,20 @@ impl WindowManager {
         Ok(())
     }
 
-    fn all<F>(&mut self, f: F) -> Result<(), Box<dyn std::error::Error>>
+    fn all<F>(&mut self, mut f: F) -> Result<(), Box<dyn std::error::Error>>
     where
-        F: Fn(&mut Screen) -> Result<(), Box<dyn std::error::Error>>
+        F: FnMut(usize, &mut Screen) -> Result<(), Box<dyn std::error::Error>>
     {
-        for screen in self.screens.iter_mut() {
-            f(screen)?;
+        for (index, screen) in self.screens.iter_mut().enumerate() {
+            f(index, screen)?;
         }
 
         Ok(())
     }
 
-    fn focused<F>(&mut self, f: F) -> Result<(), Box<dyn std::error::Error>>
+    fn focused<F>(&mut self, mut f: F) -> Result<(), Box<dyn std::error::Error>>
     where
-        F: Fn(&mut Screen) -> Result<(), Box<dyn std::error::Error>>
+        F: FnMut(&mut Screen) -> Result<(), Box<dyn std::error::Error>>
     {
         for screen in self.screens.iter_mut() {
             if screen.contains(&self.focus) {
@@ -181,19 +211,44 @@ impl WindowManager {
         match event {
             Event::MapRequest { window, .. } => {
                 let point = self.focus.clone();
+                let window = self.display.window_from_id(window)?;
+                let insert = self.config.insert.clone();
+                let padding = self.config.padding.clone();
 
-                // TODO: fix this borrowing issue
                 self.focused(|screen| {
-                    let window = self.display.window_from_id(window)?;
-                    let insert = self.config.insert.clone();
+                    screen.insert(window.clone(), insert.clone(), &point);
 
-                    screen.insert(window, insert, &point);
-
-                    Ok(())
+                    screen.tile(padding)
                 })?;
             },
             Event::UnmapNotify { window, .. } => {
                 let window = self.display.window_from_id(window)?;
+
+                self.all(|_, screen| {
+                    screen.remove(&window);
+
+                    Ok(())
+                })?;
+
+                if window == self.focus {
+                    self.focus = self.root.clone();
+                }
+            },
+            Event::EnterNotify { window, .. } => {
+                if window != self.root.id() && window > 1 && self.config.pf.focus_follows {
+                    let window = self.display.window_from_id(window)?;
+
+                    window.set_input_focus(RevertTo::Parent)?;
+
+                    self.focus = window.clone();
+                }
+            },
+            Event::FocusIn { window, .. } => {
+                let window = self.display.window_from_id(window)?;
+
+                window.set_input_focus(RevertTo::Parent)?;
+
+                self.focus = window.clone();
             },
             _ => {},
         }
@@ -202,6 +257,8 @@ impl WindowManager {
     }
 
     fn handle_config(&mut self, args: Arguments) -> Result<(), Box<dyn std::error::Error>> {
+        // TODO: we need to retile when we get commands that affect tiling
+
         match args.command {
             Command::Node(node) => match node {
                 NodeCommand::Insert { dir, ratio, toggle } => {
@@ -211,12 +268,77 @@ impl WindowManager {
                         .then(|| Insert::default())
                         .unwrap_or(insert);
                 },
-                NodeCommand::Kill => {},
-                NodeCommand::Close => {},
+                NodeCommand::Desktop { desktop } => {
+                    // TODO: send the node to another desktop
+                },
+                NodeCommand::Kill => {
+                    if self.focus != self.root {
+                        self.focus.kill()?;
+                    }
+                },
+                NodeCommand::Close => {
+                    if self.focus != self.root {
+                        self.focus.send_event(Event::ClientMessage {
+                            format: 32,
+                            window: self.focus.id(),
+                            type_: self.atoms.wm_protocols,
+                            data: ClientMessageData::Long([
+                                self.atoms.wm_delete.id(),
+                                0,
+                                0,
+                                0,
+                                0,
+                            ]),
+                        }, Vec::new(), false)?;
+                    }
+                },
+            },
+            Command::Desktop(desktop) => match desktop {
+                DesktopCommand::Focus { desktop } => {
+                    if self.config.desktops.pinned {
+                        self.focused(|screen| {
+                            screen.current = desktop.min(screen.desktops.len());
+
+                            Ok(())
+                        })?;
+                    } else {
+                        self.all(|index, screen| {
+                            if desktop > screen.desktops.len() * index {
+                                screen.current = desktop - screen.desktops.len() * index;
+                            }
+
+                            Ok(())
+                        })?;
+                    }
+                },
             },
             Command::Config(config) => match config {
-                ConfigCommand::PointerFollowsFocus => {},
-                ConfigCommand::FocusFollowsPointer => {},
+                ConfigCommand::Desktops { names, pinned } => {
+                    self.config.desktops = crate::config::Desktops {
+                        names,
+                        pinned,
+                    };
+                },
+                ConfigCommand::Window { gaps } => {
+                    self.config.window.gaps = gaps;
+                },
+                ConfigCommand::Border { normal, focused, width } => {
+                    self.config.border = crate::config::Border {
+                        normal: u32::from_str_radix(&normal, 16)?,
+                        focused: u32::from_str_radix(&focused, 16)?,
+                        width,
+                    };
+                },
+                ConfigCommand::Padding { top, bottom, left, right } => {
+                    self.config.padding = crate::config::Padding {
+                        top,
+                        bottom,
+                        left,
+                        right,
+                    };
+                },
+                ConfigCommand::PointerFollowsFocus => self.config.pf.pointer_follows ^= true,
+                ConfigCommand::FocusFollowsPointer => self.config.pf.focus_follows ^= true,
             },
         }
 

@@ -22,13 +22,60 @@ pub enum NodeCommand {
         #[arg(short, long)]
         toggle: bool,
     },
+    Desktop {
+        #[arg(short, long)]
+        desktop: usize,
+    },
 
     Close,
     Kill,
 }
 
 #[derive(Clone, Subcommand, Serialize, Deserialize)]
+pub enum DesktopCommand {
+    Focus {
+        #[arg(short, long)]
+        desktop: usize,
+    },
+}
+
+#[derive(Clone, Subcommand, Serialize, Deserialize)]
 pub enum ConfigCommand {
+    Desktops {
+        #[arg(short, long)]
+        names: Vec<String>,
+
+        #[arg(short, long)]
+        pinned: bool,
+    },
+    Window {
+        #[arg(short, long)]
+        gaps: u8,
+    },
+    Border {
+        #[arg(short, long)]
+        normal: String,
+
+        #[arg(short, long)]
+        focused: String,
+
+        #[arg(short, long)]
+        width: u8,
+    },
+    Padding {
+        #[arg(short, long)]
+        top: u16,
+
+        #[arg(short, long)]
+        bottom: u16,
+
+        #[arg(short, long)]
+        left: u16,
+
+        #[arg(short, long)]
+        right: u16,
+    },
+
     PointerFollowsFocus,
     FocusFollowsPointer,
 }
@@ -37,6 +84,9 @@ pub enum ConfigCommand {
 pub enum Command {
     #[command(subcommand)]
     Node(NodeCommand),
+
+    #[command(subcommand)]
+    Desktop(DesktopCommand),
 
     #[command(subcommand)]
     Config(ConfigCommand),

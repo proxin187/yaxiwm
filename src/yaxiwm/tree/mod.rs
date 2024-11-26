@@ -1,4 +1,4 @@
-use crate::config::Insert;
+use crate::config::{Insert, Padding};
 use crate::wm::Area;
 
 use yaxi::window::Window;
@@ -44,24 +44,29 @@ impl Node {
         }
     }
 
-    pub fn partition(&self, area: Area) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn partition(&self, area: Area, padding: Padding) -> Result<(), Box<dyn std::error::Error>> {
         match self {
             Node::Leaf { window } => {
-                window.mov_resize(area.x, area.y, area.width, area.height)?;
+                window.mov_resize(
+                    area.x + padding.left,
+                    area.y - padding.top,
+                    area.width - padding.left - padding.right,
+                    area.height - padding.top - padding.bottom
+                )?;
             },
             Node::Internal { left, right, insert } => {
                 let factor = insert.ratio.min(100) as f64 / 100.0;
 
                 match insert.dir {
                     Direction::North | Direction::South => {
-                        left.partition(Area::new(area.x, area.y, area.width, (area.height as f64 * factor) as u16))?;
+                        left.partition(Area::new(area.x, area.y, area.width, (area.height as f64 * factor) as u16), padding)?;
 
-                        right.partition(Area::new(area.x, area.y + (area.height as f64 * factor) as u16, area.width, area.height - (area.height as f64 * factor) as u16))?;
+                        right.partition(Area::new(area.x, area.y + (area.height as f64 * factor) as u16, area.width, area.height - (area.height as f64 * factor) as u16), padding)?;
                     },
                     Direction::West | Direction::East => {
-                        left.partition(Area::new(area.x, area.y, (area.width as f64 * factor) as u16, area.height))?;
+                        left.partition(Area::new(area.x, area.y, (area.width as f64 * factor) as u16, area.height), padding)?;
 
-                        right.partition(Area::new(area.x + (area.width as f64 * factor) as u16, area.y, area.width - (area.width as f64 * factor) as u16, area.height))?;
+                        right.partition(Area::new(area.x + (area.width as f64 * factor) as u16, area.y, area.width - (area.width as f64 * factor) as u16, area.height), padding)?;
                     },
                 }
             },

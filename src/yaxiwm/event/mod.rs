@@ -3,7 +3,7 @@ use yaxi::proto::Event;
 use std::sync::{Mutex, Condvar};
 use std::collections::VecDeque;
 
-use ipc::Args;
+use ipc::Arguments;
 
 macro_rules! lock {
     ($mutex:expr) => {
@@ -13,7 +13,7 @@ macro_rules! lock {
 
 pub enum EventType {
     XEvent(Event),
-    Config(Args),
+    Config(Arguments),
 }
 
 pub struct Queue<T> {
