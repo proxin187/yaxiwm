@@ -10,7 +10,7 @@ pub enum Direction {
     East,
 }
 
-#[derive(Clone, Subcommand, Serialize, Deserialize)]
+#[derive(Debug, Clone, Subcommand, Serialize, Deserialize)]
 pub enum NodeCommand {
     Insert {
         #[command(subcommand)]
@@ -31,7 +31,7 @@ pub enum NodeCommand {
     Kill,
 }
 
-#[derive(Clone, Subcommand, Serialize, Deserialize)]
+#[derive(Debug, Clone, Subcommand, Serialize, Deserialize)]
 pub enum DesktopCommand {
     Focus {
         #[arg(short, long)]
@@ -39,7 +39,7 @@ pub enum DesktopCommand {
     },
 }
 
-#[derive(Clone, Subcommand, Serialize, Deserialize)]
+#[derive(Debug, Clone, Subcommand, Serialize, Deserialize)]
 pub enum ConfigCommand {
     Desktops {
         #[arg(short, long)]
@@ -60,7 +60,7 @@ pub enum ConfigCommand {
         focused: String,
 
         #[arg(short, long)]
-        width: u8,
+        width: u16,
     },
     Padding {
         #[arg(short, long)]
@@ -80,7 +80,7 @@ pub enum ConfigCommand {
     FocusFollowsPointer,
 }
 
-#[derive(Clone, Subcommand, Serialize, Deserialize)]
+#[derive(Debug, Clone, Subcommand, Serialize, Deserialize)]
 pub enum Command {
     #[command(subcommand)]
     Node(NodeCommand),
@@ -92,7 +92,7 @@ pub enum Command {
     Config(ConfigCommand),
 }
 
-#[derive(Parser, Serialize, Deserialize)]
+#[derive(Debug, Parser, Serialize, Deserialize)]
 pub struct Arguments {
     #[command(subcommand)]
     pub command: Command,

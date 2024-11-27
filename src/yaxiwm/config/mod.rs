@@ -46,7 +46,7 @@ pub struct Window {
 pub struct Border {
     pub normal: u32,
     pub focused: u32,
-    pub width: u8,
+    pub width: u16,
 }
 
 #[derive(Debug, Clone, Copy)]

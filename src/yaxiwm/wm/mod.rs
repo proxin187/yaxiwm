@@ -2,10 +2,11 @@ use crate::config::{Configuration, Insert, Padding};
 use crate::event::{Queue, EventType};
 use crate::tree::Node;
 use crate::startup;
+use crate::server;
 
 use yaxi::display::{self, Display, Atom};
 use yaxi::window::{Window, WindowKind};
-use yaxi::proto::{Event, RevertTo, ClientMessageData};
+use yaxi::proto::{Event, EventMask, EventKind, RevertTo, ClientMessageData};
 
 use std::sync::Arc;
 use std::thread;
@@ -102,6 +103,15 @@ impl Screen {
         self.desktops.iter().any(|desktop| desktop.contains(window))
     }
 
+    pub fn resize(&mut self, size: usize) {
+        if size >= self.desktops.len() {
+            self.desktops.resize_with(size, || Desktop::new(self.area));
+        } else {
+            // TODO: finish this
+            let excess = self.desktops.drain(size..self.len()).collect::<>;
+        }
+    }
+
     pub fn insert(&mut self, window: Window, insert: Insert, point: &Window) {
         if let Some(desktop) = self.desktops.get_mut(self.current) {
             desktop.insert(window, insert, point);
@@ -158,6 +168,13 @@ impl WindowManager {
         let display = display::open(None)?;
         let root = display.default_root_window()?;
 
+        root.select_input(&[
+            EventMask::SubstructureNotify,
+            EventMask::SubstructureRedirect,
+            EventMask::EnterWindow,
+            EventMask::FocusChange,
+        ])?;
+
         let atoms = Atoms::new(&display)?;
 
         Ok(WindowManager {
@@ -208,6 +225,8 @@ impl WindowManager {
     }
 
     fn handle_event(&mut self, event: Event) -> Result<(), Box<dyn std::error::Error>> {
+        println!("event: {:?}", event);
+
         match event {
             Event::MapRequest { window, .. } => {
                 let point = self.focus.clone();
@@ -215,8 +234,22 @@ impl WindowManager {
                 let insert = self.config.insert.clone();
                 let padding = self.config.padding.clone();
 
+                window.select_input(&[
+                    EventMask::SubstructureNotify,
+                    EventMask::SubstructureRedirect,
+                    EventMask::EnterWindow,
+                    EventMask::FocusChange,
+                ])?;
+
+                window.set_border_pixel(self.config.border.normal)?;
+
+                window.set_border_width(self.config.border.width)?;
+
                 self.focused(|screen| {
                     screen.insert(window.clone(), insert.clone(), &point);
+
+                    // TODO: we never reach here
+                    println!("inserted");
 
                     screen.tile(padding)
                 })?;
@@ -239,14 +272,14 @@ impl WindowManager {
                     let window = self.display.window_from_id(window)?;
 
                     window.set_input_focus(RevertTo::Parent)?;
-
-                    self.focus = window.clone();
                 }
             },
             Event::FocusIn { window, .. } => {
                 let window = self.display.window_from_id(window)?;
 
-                window.set_input_focus(RevertTo::Parent)?;
+                self.focus.set_border_pixel(self.config.border.normal)?;
+
+                window.set_border_pixel(self.config.border.focused)?;
 
                 self.focus = window.clone();
             },
@@ -258,6 +291,8 @@ impl WindowManager {
 
     fn handle_config(&mut self, args: Arguments) -> Result<(), Box<dyn std::error::Error>> {
         // TODO: we need to retile when we get commands that affect tiling
+
+        println!("config: {:?}", args);
 
         match args.command {
             Command::Node(node) => match node {
@@ -318,6 +353,8 @@ impl WindowManager {
                         names,
                         pinned,
                     };
+
+                    // TODO: we need to update desktops on each screen
                 },
                 ConfigCommand::Window { gaps } => {
                     self.config.window.gaps = gaps;
@@ -350,6 +387,8 @@ impl WindowManager {
         let events = self.events.clone();
 
         self.load_screens()?;
+
+        server::spawn(events.clone());
 
         thread::spawn(move || {
             listen(display, events).expect("failed to listen");
