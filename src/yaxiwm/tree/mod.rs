@@ -6,6 +6,11 @@ use yaxi::window::Window;
 use ipc::Direction;
 
 
+pub enum Point {
+    Window(Window),
+    Any,
+}
+
 #[derive(Clone)]
 pub enum Node {
     Leaf {
@@ -21,6 +26,15 @@ pub enum Node {
 impl Node {
     pub fn root(window: Window) -> Node {
         Node::Leaf { window }
+    }
+
+    pub fn collect(self) -> Vec<Window> {
+        match self {
+            Node::Leaf { window } => vec![window],
+            Node::Internal { left, right, .. } => {
+                [left.collect(), right.collect()].concat()
+            },
+        }
     }
 
     pub fn contains(&self, needle: &Window) -> bool {
@@ -90,17 +104,20 @@ impl Node {
         }
     }
 
-    fn find(&mut self, point: &Window) -> Option<&mut Node> {
+    fn find(&mut self, point: &Point) -> Option<&mut Node> {
         match self {
-            Node::Leaf { window } => (window == point).then(|| self),
+            Node::Leaf { window } => match point {
+                Point::Window(point) => (window == point).then(|| self),
+                Point::Any => Some(self),
+            },
             Node::Internal { left, right, .. } => {
                 left.find(&point).or(right.find(&point))
             },
         }
     }
 
-    pub fn insert(&mut self, window: Window, insert: Insert, point: &Window) {
-        if let Some(node) = self.find(point) {
+    pub fn insert(&mut self, window: Window, insert: Insert, point: Point) {
+        if let Some(node) = self.find(&point) {
             *node = match insert.dir {
                 Direction::East | Direction::South => Node::Internal {
                     left: Box::new(node.clone()),

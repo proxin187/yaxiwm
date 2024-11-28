@@ -1,6 +1,6 @@
 use crate::config::{Configuration, Insert, Padding};
 use crate::event::{Queue, EventType};
-use crate::tree::Node;
+use crate::tree::{Node, Point};
 use crate::startup;
 use crate::server;
 
@@ -31,6 +31,10 @@ impl Area {
             height,
         }
     }
+
+    pub fn contains(&self, x: u16, y: u16) -> bool {
+        (x > self.x && x < self.x + self.width) && (y > self.y && y < self.y + self.height)
+    }
 }
 
 pub struct Desktop {
@@ -53,7 +57,7 @@ impl Desktop {
         }
     }
 
-    pub fn insert(&mut self, window: Window, insert: Insert, point: &Window) {
+    pub fn insert(&mut self, window: Window, insert: Insert, point: Point) {
         if let Some(clients) = &mut self.clients {
             clients.insert(window, insert, point);
         }
@@ -107,12 +111,18 @@ impl Screen {
         if size >= self.desktops.len() {
             self.desktops.resize_with(size, || Desktop::new(self.area));
         } else {
-            // TODO: finish this
-            let excess = self.desktops.drain(size..self.len()).collect::<>;
+            let excess = self.desktops.drain(size..self.desktops.len())
+                .filter_map(|desktop| desktop.clients)
+                .flat_map(|client| client.collect())
+                .collect::<Vec<Window>>();
+
+            for window in excess {
+                self.desktops[size - 1].insert(window, Insert::default(), Point::Any);
+            }
         }
     }
 
-    pub fn insert(&mut self, window: Window, insert: Insert, point: &Window) {
+    pub fn insert(&mut self, window: Window, insert: Insert, point: Point) {
         if let Some(desktop) = self.desktops.get_mut(self.current) {
             desktop.insert(window, insert, point);
         }
@@ -156,7 +166,7 @@ impl Atoms {
 pub struct WindowManager {
     display: Display,
     root: Window,
-    focus: Window,
+    focus: Option<Window>,
     events: Arc<Queue<EventType>>,
     screens: Vec<Screen>,
     config: Configuration,
@@ -179,8 +189,8 @@ impl WindowManager {
 
         Ok(WindowManager {
             display,
-            root: root.clone(),
-            focus: root,
+            root,
+            focus: None,
             events: Arc::new(Queue::new()),
             screens: Vec::new(),
             config: Configuration::new(),
@@ -213,8 +223,15 @@ impl WindowManager {
     where
         F: FnMut(&mut Screen) -> Result<(), Box<dyn std::error::Error>>
     {
+        let pointer = self.root.query_pointer()?;
+
         for screen in self.screens.iter_mut() {
-            if screen.contains(&self.focus) {
+            let cond = match &self.focus {
+                Some(focus) => screen.contains(focus),
+                None => screen.area.contains(pointer.root_x, pointer.root_y),
+            };
+
+            if cond {
                 f(screen)?;
 
                 return Ok(());
@@ -224,12 +241,22 @@ impl WindowManager {
         Ok(())
     }
 
+    fn map_focus<F>(&self, mut f: F) -> Result<(), Box<dyn std::error::Error>>
+    where
+        F: FnMut(&Window) -> Result<(), Box<dyn std::error::Error>>
+    {
+        match &self.focus {
+            Some(focus) if focus != &self.root => f(focus),
+            _ => Ok(()),
+        }
+    }
+
     fn handle_event(&mut self, event: Event) -> Result<(), Box<dyn std::error::Error>> {
         println!("event: {:?}", event);
 
         match event {
             Event::MapRequest { window, .. } => {
-                let point = self.focus.clone();
+                let focus = self.focus.clone();
                 let window = self.display.window_from_id(window)?;
                 let insert = self.config.insert.clone();
                 let padding = self.config.padding.clone();
@@ -246,10 +273,12 @@ impl WindowManager {
                 window.set_border_width(self.config.border.width)?;
 
                 self.focused(|screen| {
-                    screen.insert(window.clone(), insert.clone(), &point);
+                    screen.insert(window.clone(), insert.clone(), focus.clone().map(|focus| Point::Window(focus)).unwrap_or(Point::Any));
 
-                    // TODO: we never reach here
+                    // TODO: we reach here
                     println!("inserted");
+
+                    // TODO: there is still something wrong though
 
                     screen.tile(padding)
                 })?;
@@ -263,8 +292,8 @@ impl WindowManager {
                     Ok(())
                 })?;
 
-                if window == self.focus {
-                    self.focus = self.root.clone();
+                if self.focus == Some(window) {
+                    self.focus.replace(self.root.clone());
                 }
             },
             Event::EnterNotify { window, .. } => {
@@ -275,13 +304,19 @@ impl WindowManager {
                 }
             },
             Event::FocusIn { window, .. } => {
-                let window = self.display.window_from_id(window)?;
+                // TODO: we should have a function that checks whether a window is managed by us or
+                // not in order to minimize edge cases
+                if window != self.root.id() {
+                    let window = self.display.window_from_id(window)?;
 
-                self.focus.set_border_pixel(self.config.border.normal)?;
+                    window.set_border_pixel(self.config.border.focused)?;
 
-                window.set_border_pixel(self.config.border.focused)?;
+                    if let Some(focus) = &self.focus {
+                        focus.set_border_pixel(self.config.border.normal)?;
+                    }
 
-                self.focus = window.clone();
+                    self.focus.replace(window.clone());
+                }
             },
             _ => {},
         }
@@ -307,25 +342,30 @@ impl WindowManager {
                     // TODO: send the node to another desktop
                 },
                 NodeCommand::Kill => {
-                    if self.focus != self.root {
-                        self.focus.kill()?;
-                    }
+                    self.map_focus(|focus| {
+                        focus.kill().map_err(|err| err.into())
+                    })?;
                 },
                 NodeCommand::Close => {
-                    if self.focus != self.root {
-                        self.focus.send_event(Event::ClientMessage {
+                    let wm_protocols = self.atoms.wm_protocols.clone();
+                    let wm_delete = self.atoms.wm_delete.clone();
+
+                    self.map_focus(|focus| {
+                        focus.send_event(Event::ClientMessage {
                             format: 32,
-                            window: self.focus.id(),
-                            type_: self.atoms.wm_protocols,
+                            window: focus.id(),
+                            type_: wm_protocols,
                             data: ClientMessageData::Long([
-                                self.atoms.wm_delete.id(),
+                                wm_delete.id(),
                                 0,
                                 0,
                                 0,
                                 0,
                             ]),
                         }, Vec::new(), false)?;
-                    }
+
+                        Ok(())
+                    })?;
                 },
             },
             Command::Desktop(desktop) => match desktop {
@@ -349,12 +389,18 @@ impl WindowManager {
             },
             Command::Config(config) => match config {
                 ConfigCommand::Desktops { names, pinned } => {
+                    let length = names.len();
+
                     self.config.desktops = crate::config::Desktops {
                         names,
                         pinned,
                     };
 
-                    // TODO: we need to update desktops on each screen
+                    self.all(|_, screen| {
+                        screen.resize(length);
+
+                        Ok(())
+                    })?;
                 },
                 ConfigCommand::Window { gaps } => {
                     self.config.window.gaps = gaps;
