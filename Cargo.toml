@@ -1,15 +1,15 @@
 [package]
-name = "yaxiwm"
+name = "yokai"
 version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "yaxiwm"
-path = "src/yaxiwm/main.rs"
+name = "yokai"
+path = "src/yokai/main.rs"
 
 [[bin]]
-name = "yaxc"
-path = "src/yaxc/main.rs"
+name = "yokac"
+path = "src/yokac/main.rs"
 
 [lib]
 name = "ipc"

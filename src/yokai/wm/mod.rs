@@ -58,8 +58,9 @@ impl Desktop {
     }
 
     pub fn insert(&mut self, window: Window, insert: Insert, point: Point) {
-        if let Some(clients) = &mut self.clients {
-            clients.insert(window, insert, point);
+        match &mut self.clients {
+            Some(clients) => clients.insert(window, insert, point),
+            None => self.clients = Some(Node::root(window)),
         }
     }
 
@@ -275,21 +276,17 @@ impl WindowManager {
                 self.focused(|screen| {
                     screen.insert(window.clone(), insert.clone(), focus.clone().map(|focus| Point::Window(focus)).unwrap_or(Point::Any));
 
-                    // TODO: we reach here
-                    println!("inserted");
-
-                    // TODO: there is still something wrong though
-
                     screen.tile(padding)
                 })?;
             },
             Event::UnmapNotify { window, .. } => {
                 let window = self.display.window_from_id(window)?;
+                let padding = self.config.padding.clone();
 
                 self.all(|_, screen| {
                     screen.remove(&window);
 
-                    Ok(())
+                    screen.tile(padding)
                 })?;
 
                 if self.focus == Some(window) {
@@ -370,16 +367,20 @@ impl WindowManager {
             },
             Command::Desktop(desktop) => match desktop {
                 DesktopCommand::Focus { desktop } => {
+                    let padding = self.config.padding.clone();
+
                     if self.config.desktops.pinned {
                         self.focused(|screen| {
                             screen.current = desktop.min(screen.desktops.len());
 
-                            Ok(())
+                            screen.tile(padding)
                         })?;
                     } else {
                         self.all(|index, screen| {
                             if desktop > screen.desktops.len() * index {
-                                screen.current = desktop - screen.desktops.len() * index;
+                                screen.current = (desktop - screen.desktops.len() * index).min(screen.desktops.len());
+
+                                screen.tile(padding)?;
                             }
 
                             Ok(())

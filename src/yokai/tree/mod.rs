@@ -1,7 +1,7 @@
 use crate::config::{Insert, Padding};
 use crate::wm::Area;
 
-use yaxi::window::Window;
+use yaxi::window::{Window, WindowKind};
 
 use ipc::Direction;
 
@@ -67,6 +67,8 @@ impl Node {
                     area.width - padding.left - padding.right,
                     area.height - padding.top - padding.bottom
                 )?;
+
+                window.map(WindowKind::Window)?;
             },
             Node::Internal { left, right, insert } => {
                 let factor = insert.ratio.min(100) as f64 / 100.0;
