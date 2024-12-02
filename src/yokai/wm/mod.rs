@@ -286,7 +286,9 @@ impl WindowManager {
             Event::UnmapNotify { window, .. } => {
                 let padding = self.config.padding.clone();
 
-                self.all(move |_, screen| {
+                // TODO: there is still an error here lol
+
+                self.all(|_, screen| {
                     screen.remove(window);
 
                     screen.tile(padding)
