@@ -91,9 +91,9 @@ impl Node {
         Ok(())
     }
 
-    pub fn remove(&mut self, needle: &Window) -> bool {
+    pub fn remove(&mut self, needle: u32) -> bool {
         match self {
-            Node::Leaf { window } => window == needle,
+            Node::Leaf { window } => window.id() == needle,
             Node::Internal { left, right, .. } => {
                 if left.remove(needle) {
                     *self = *right.clone();

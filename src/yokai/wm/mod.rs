@@ -64,9 +64,9 @@ impl Desktop {
         }
     }
 
-    pub fn remove(&mut self, window: &Window) {
+    pub fn remove(&mut self, wid: impl Into<u32>) {
         if let Some(clients) = &mut self.clients {
-            clients.remove(window);
+            clients.remove(wid.into());
         }
     }
 
@@ -129,9 +129,9 @@ impl Screen {
         }
     }
 
-    pub fn remove(&mut self, window: &Window) {
+    pub fn remove(&mut self, wid: impl Into<u32>) {
         if let Some(desktop) = self.desktops.get_mut(self.current) {
-            desktop.remove(window);
+            desktop.remove(wid);
         }
     }
 
@@ -252,6 +252,10 @@ impl WindowManager {
         }
     }
 
+    fn is_managed(&self, window: &Window) -> bool {
+        self.screens.iter().any(|screen| screen.contains(window))
+    }
+
     fn handle_event(&mut self, event: Event) -> Result<(), Box<dyn std::error::Error>> {
         println!("event: {:?}", event);
 
@@ -280,33 +284,32 @@ impl WindowManager {
                 })?;
             },
             Event::UnmapNotify { window, .. } => {
-                let window = self.display.window_from_id(window)?;
                 let padding = self.config.padding.clone();
 
-                self.all(|_, screen| {
-                    screen.remove(&window);
+                self.all(move |_, screen| {
+                    screen.remove(window);
 
                     screen.tile(padding)
                 })?;
 
-                if self.focus == Some(window) {
+                if self.focus.clone().map(|window| window.id()) == Some(window) {
                     self.focus.replace(self.root.clone());
                 }
             },
             Event::EnterNotify { window, .. } => {
-                if window != self.root.id() && window > 1 && self.config.pf.focus_follows {
-                    let window = self.display.window_from_id(window)?;
+                let window = self.display.window_from_id(window)?;
 
+                if self.is_managed(&window) && self.config.pf.focus_follows {
                     window.set_input_focus(RevertTo::Parent)?;
                 }
             },
             Event::FocusIn { window, .. } => {
-                // TODO: we should have a function that checks whether a window is managed by us or
-                // not in order to minimize edge cases
-                if window != self.root.id() {
-                    let window = self.display.window_from_id(window)?;
+                let window = self.display.window_from_id(window)?;
 
+                if self.is_managed(&window) {
                     window.set_border_pixel(self.config.border.focused)?;
+
+                    window.raise()?;
 
                     if let Some(focus) = &self.focus {
                         focus.set_border_pixel(self.config.border.normal)?;
@@ -323,6 +326,8 @@ impl WindowManager {
 
     fn handle_config(&mut self, args: Arguments) -> Result<(), Box<dyn std::error::Error>> {
         // TODO: we need to retile when we get commands that affect tiling
+
+        // TODO: we need to implement preselect and node selection
 
         println!("config: {:?}", args);
 
