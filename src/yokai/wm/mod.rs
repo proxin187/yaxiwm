@@ -65,8 +65,8 @@ impl Desktop {
     }
 
     pub fn remove(&mut self, wid: impl Into<u32>) {
-        if let Some(clients) = &mut self.clients {
-            clients.remove(wid.into());
+        if self.clients.as_mut().map(|clients| clients.remove(wid.into())).unwrap_or(false) {
+            self.clients = None;
         }
     }
 
@@ -227,12 +227,7 @@ impl WindowManager {
         let pointer = self.root.query_pointer()?;
 
         for screen in self.screens.iter_mut() {
-            let cond = match &self.focus {
-                Some(focus) => screen.contains(focus),
-                None => screen.area.contains(pointer.root_x, pointer.root_y),
-            };
-
-            if cond {
+            if self.focus.as_ref().map(|focus| screen.contains(focus)).unwrap_or(screen.area.contains(pointer.root_x, pointer.root_y)) {
                 f(screen)?;
 
                 return Ok(());
@@ -266,6 +261,8 @@ impl WindowManager {
                 let insert = self.config.insert.clone();
                 let padding = self.config.padding.clone();
 
+                println!("[handle_event] map request");
+
                 window.select_input(&[
                     EventMask::SubstructureNotify,
                     EventMask::SubstructureRedirect,
@@ -277,16 +274,20 @@ impl WindowManager {
 
                 window.set_border_width(self.config.border.width)?;
 
+                println!("[handle_event] trying to get focused");
+
                 self.focused(|screen| {
                     screen.insert(window.clone(), insert.clone(), focus.clone().map(|focus| Point::Window(focus)).unwrap_or(Point::Any));
 
+                    println!("[handle_event] inserted");
+
                     screen.tile(padding)
                 })?;
+
+                println!("[handle_event] done");
             },
             Event::UnmapNotify { window, .. } => {
                 let padding = self.config.padding.clone();
-
-                // TODO: there is still an error here lol
 
                 self.all(|_, screen| {
                     screen.remove(window);
@@ -295,7 +296,7 @@ impl WindowManager {
                 })?;
 
                 if self.focus.clone().map(|window| window.id()) == Some(window) {
-                    self.focus.replace(self.root.clone());
+                    self.focus = None;
                 }
             },
             Event::EnterNotify { window, .. } => {
