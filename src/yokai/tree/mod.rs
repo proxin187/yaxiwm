@@ -106,6 +106,22 @@ impl Node {
         }
     }
 
+    pub fn map_internal<F>(&mut self, needle: u32, f: F) -> bool
+    where
+        F: Clone + Copy + Fn(Box<Node>, Box<Node>, &Insert) -> Node
+    {
+        match self {
+            Node::Leaf { window } => window.id() == needle,
+            Node::Internal { left, right, insert } => {
+                if left.map_internal(needle, f) || right.map_internal(needle, f) {
+                    *self = f(left.clone(), right.clone(), insert);
+                }
+
+                false
+            },
+        }
+    }
+
     fn find(&mut self, point: &Point) -> Option<&mut Node> {
         match self {
             Node::Leaf { window } => match point {

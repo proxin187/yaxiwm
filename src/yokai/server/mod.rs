@@ -17,7 +17,7 @@ pub struct Server {
 
 impl Server {
     pub fn new(events: Arc<Queue<EventType>>) -> Result<Server, Box<dyn std::error::Error>> {
-        let path = format!("{}/.config/yaxiwm/ipc", env::var("HOME")?);
+        let path = format!("{}/.config/yokai/ipc", env::var("HOME")?);
 
         if fs::exists(&path)? {
             fs::remove_file(&path)?;

@@ -2,12 +2,28 @@ use serde::{Serialize, Deserialize};
 use clap::{Parser, Subcommand};
 
 
-#[derive(Debug, Clone, PartialEq, Subcommand, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Subcommand, Serialize, Deserialize)]
 pub enum Direction {
     North,
     South,
     West,
     East,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Subcommand, Serialize, Deserialize)]
+pub enum Change {
+    Add {
+        #[arg(value_name = "VALUE")]
+        value: i8,
+    },
+    Sub {
+        #[arg(value_name = "VALUE")]
+        value: i8,
+    },
+    Set {
+        #[arg(value_name = "VALUE")]
+        value: i8,
+    },
 }
 
 #[derive(Debug, Clone, Subcommand, Serialize, Deserialize)]
@@ -23,8 +39,12 @@ pub enum NodeCommand {
         toggle: bool,
     },
     Desktop {
-        #[arg(short, long)]
+        #[arg(value_name = "DESKTOP")]
         desktop: usize,
+    },
+    Ratio {
+        #[command(subcommand)]
+        change: Change,
     },
 
     Close,

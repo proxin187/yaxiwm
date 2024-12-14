@@ -14,7 +14,7 @@ impl Client {
         let home = env::var("HOME")?;
 
         Ok(Client {
-            stream: UnixStream::connect(format!("{home}/.config/yaxiwm/ipc"))?,
+            stream: UnixStream::connect(format!("{home}/.config/yokai/ipc"))?,
         })
     }
 

@@ -11,7 +11,7 @@ use yaxi::proto::{Event, EventMask, EventKind, RevertTo, ClientMessageData};
 use std::sync::Arc;
 use std::thread;
 
-use ipc::{Arguments, Command, NodeCommand, DesktopCommand, ConfigCommand};
+use ipc::{Arguments, Command, NodeCommand, DesktopCommand, ConfigCommand, Change};
 
 
 #[derive(Clone, Copy)]
@@ -67,6 +67,15 @@ impl Desktop {
     pub fn remove(&mut self, wid: impl Into<u32>) {
         if self.clients.as_mut().map(|clients| clients.remove(wid.into())).unwrap_or(false) {
             self.clients = None;
+        }
+    }
+
+    pub fn map_internal<F>(&mut self, wid: impl Into<u32>, f: F)
+    where
+        F: Clone + Copy + Fn(Box<Node>, Box<Node>, &Insert) -> Node
+    {
+        if let Some(clients) = &mut self.clients {
+            clients.map_internal(wid.into(), f);
         }
     }
 
@@ -132,6 +141,15 @@ impl Screen {
     pub fn remove(&mut self, wid: impl Into<u32>) {
         if let Some(desktop) = self.desktops.get_mut(self.current) {
             desktop.remove(wid);
+        }
+    }
+
+    pub fn map_internal<F>(&mut self, wid: impl Into<u32>, f: F)
+    where
+        F: Clone + Copy + Fn(Box<Node>, Box<Node>, &Insert) -> Node
+    {
+        if let Some(desktop) = self.desktops.get_mut(self.current) {
+            desktop.map_internal(wid, f);
         }
     }
 
@@ -314,11 +332,11 @@ impl WindowManager {
 
                     window.raise()?;
 
-                    if let Some(focus) = &self.focus {
-                        focus.set_border_pixel(self.config.border.normal)?;
+                    if let Some(focus) = self.focus.replace(window.clone()) {
+                        if focus.id() != window.id() {
+                            focus.set_border_pixel(self.config.border.normal)?;
+                        }
                     }
-
-                    self.focus.replace(window.clone());
                 }
             },
             _ => {},
@@ -331,6 +349,8 @@ impl WindowManager {
         // TODO: we need to retile when we get commands that affect tiling
 
         // TODO: we need to implement preselect and node selection
+
+        // TODO: we need to implement reverse binary tree
 
         println!("config: {:?}", args);
 
@@ -345,6 +365,30 @@ impl WindowManager {
                 },
                 NodeCommand::Desktop { desktop } => {
                     // TODO: send the node to another desktop
+                },
+                NodeCommand::Ratio { change } => {
+                    if let Some(focus) = self.focus.clone() {
+                        let padding = self.config.padding.clone();
+
+                        self.focused(move |screen| {
+                            screen.map_internal(focus.id(), |left, right, insert| {
+                                Node::Internal {
+                                    left,
+                                    right,
+                                    insert: Insert {
+                                        dir: insert.dir,
+                                        ratio: match change {
+                                            Change::Add { value } => insert.ratio + value,
+                                            Change::Sub { value } => insert.ratio - value.min(insert.ratio),
+                                            Change::Set { value } => value,
+                                        }.min(90).max(10),
+                                    },
+                                }
+                            });
+
+                            screen.tile(padding)
+                        })?;
+                    }
                 },
                 NodeCommand::Kill => {
                     self.map_focus(|focus| {
