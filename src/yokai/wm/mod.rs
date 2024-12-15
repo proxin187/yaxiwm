@@ -7,13 +7,35 @@ use crate::server;
 use yaxi::display::{self, Display, Atom};
 use yaxi::window::{Window, WindowKind, WindowArguments, ValuesBuilder};
 use yaxi::proto::{Event, EventMask, RevertTo, ClientMessageData, WindowClass};
-use yaxi::ewmh::DesktopViewport;
+use yaxi::ewmh::{EwmhWindowType, DesktopViewport};
 
 use std::sync::Arc;
 use std::thread;
 
 use ipc::{Arguments, Command, NodeCommand, DesktopCommand, ConfigCommand, Change};
 
+const DOCK: [EwmhWindowType; 3] = [EwmhWindowType::Dock, EwmhWindowType::Toolbar, EwmhWindowType::Menu];
+const FLOAT: [EwmhWindowType; 3] = [EwmhWindowType::Splash, EwmhWindowType::Utility, EwmhWindowType::Dialog];
+
+#[derive(Debug, Clone, Copy)]
+pub enum Mode {
+    Float,
+    Dock,
+}
+
+impl Mode {
+    // sometimes you just feel like using functions for everything, who needs if statements anyway
+    fn from(types: &[EwmhWindowType]) -> Option<Mode> {
+        DOCK.iter()
+            .any(|type_| types.contains(type_))
+            .then(|| Mode::Dock)
+            .or_else(|| {
+                FLOAT.iter()
+                    .any(|type_| types.contains(type_))
+                    .then(|| Mode::Float)
+            })
+    }
+}
 
 #[derive(Clone, Copy)]
 pub struct Area {
@@ -38,8 +60,24 @@ impl Area {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct AltClient {
+    window: Window,
+    mode: Mode,
+}
+
+impl AltClient {
+    pub fn new(window: Window, mode: Mode) -> AltClient {
+        AltClient {
+            window,
+            mode,
+        }
+    }
+}
+
 pub struct Desktop {
     clients: Option<Node>,
+    alt: Vec<AltClient>,
     area: Area,
 }
 
@@ -47,6 +85,7 @@ impl Desktop {
     pub fn new(area: Area) -> Desktop {
         Desktop {
             clients: None,
+            alt: Vec::new(),
             area,
         }
     }
@@ -58,17 +97,27 @@ impl Desktop {
         }
     }
 
-    pub fn insert(&mut self, window: Window, insert: Insert, point: Point) {
-        match &mut self.clients {
-            Some(clients) => clients.insert(window, insert, point),
-            None => self.clients = Some(Node::root(window)),
+    pub fn insert(&mut self, window: Window, insert: Insert, point: Point, mode: Option<Mode>) {
+        if let Some(mode) = mode {
+            self.alt.push(AltClient::new(window, mode));
+        } else {
+            match &mut self.clients {
+                Some(clients) => clients.insert(window, insert, point),
+                None => self.clients = Some(Node::root(window)),
+            }
         }
     }
 
-    pub fn remove(&mut self, wid: impl Into<u32>) {
-        if self.clients.as_mut().map(|clients| clients.remove(wid.into())).unwrap_or(false) {
+    pub fn remove(&mut self, wid: impl Into<u32>) -> Option<AltClient> {
+        let wid = wid.into();
+
+        if self.clients.as_mut().map(|clients| clients.remove(wid)).unwrap_or(false) {
             self.clients = None;
         }
+
+        self.alt.iter()
+            .position(|alt| alt.window.id() == wid)
+            .and_then(|index| (index < self.alt.len()).then(|| self.alt.remove(index)))
     }
 
     pub fn map_internal<F>(&mut self, wid: impl Into<u32>, f: F)
@@ -102,6 +151,8 @@ impl Desktop {
             clients.partition(area, gaps)?;
         }
 
+        // TODO: we need to show all the alt clients here
+
         Ok(())
     }
 }
@@ -129,27 +180,28 @@ impl Screen {
         if size >= self.desktops.len() {
             self.desktops.resize_with(size, || Desktop::new(self.area));
         } else {
+            // TODO: we also need to collect alt
+
             let excess = self.desktops.drain(size..self.desktops.len())
                 .filter_map(|desktop| desktop.clients)
                 .flat_map(|client| client.collect())
                 .collect::<Vec<Window>>();
 
             for window in excess {
-                self.desktops[size - 1].insert(window, Insert::default(), Point::Any);
+                self.desktops[size - 1].insert(window, Insert::default(), Point::Any, None);
             }
         }
     }
 
-    pub fn insert(&mut self, window: Window, insert: Insert, point: Point) {
+    pub fn insert(&mut self, window: Window, insert: Insert, point: Point, mode: Option<Mode>) {
         if let Some(desktop) = self.desktops.get_mut(self.current) {
-            desktop.insert(window, insert, point);
+            desktop.insert(window, insert, point, mode);
         }
     }
 
-    pub fn remove(&mut self, wid: impl Into<u32>) {
-        if let Some(desktop) = self.desktops.get_mut(self.current) {
-            desktop.remove(wid);
-        }
+    pub fn remove(&mut self, wid: impl Into<u32>) -> Option<AltClient> {
+        self.desktops.get_mut(self.current)
+            .and_then(|desktop| desktop.remove(wid))
     }
 
     pub fn map_internal<F>(&mut self, wid: impl Into<u32>, f: F)
@@ -337,7 +389,7 @@ impl WindowManager {
         self.screens.iter().any(|screen| screen.contains(window))
     }
 
-    fn unmanage(&mut self, window: u32) -> Result<(), Box<dyn std::error::Error>> {
+    fn unmanage(&mut self, window: u32) -> Result<Option<AltClient>, Box<dyn std::error::Error>> {
         let padding = self.config.padding.clone();
         let gaps = self.config.gaps.clone();
 
@@ -351,7 +403,9 @@ impl WindowManager {
             self.focus = None;
         }
 
-        Ok(())
+        self.focused(|_, screen| {
+            Ok(screen.remove(window))
+        })
     }
 
     fn handle_event(&mut self, event: Event) -> Result<(), Box<dyn std::error::Error>> {
@@ -376,8 +430,19 @@ impl WindowManager {
 
                 window.set_border_width(self.config.border.width)?;
 
+                let types = self.display
+                    .use_ewmh(&window)
+                    .get_wm_window_type()?;
+
                 self.focused(|_, screen| {
-                    screen.insert(window.clone(), insert.clone(), focus.clone().map(|focus| Point::Window(focus)).unwrap_or(Point::Any));
+                    screen.insert(
+                        window.clone(),
+                        insert.clone(),
+                        focus.clone()
+                            .map(|focus| Point::Window(focus))
+                            .unwrap_or(Point::Any),
+                        Mode::from(&types),
+                    );
 
                     screen.tile(padding, gaps)
                 })?;
@@ -417,6 +482,8 @@ impl WindowManager {
     fn handle_config(&mut self, args: Arguments) -> Result<(), Box<dyn std::error::Error>> {
         // TODO: we need to implement node selection
 
+        // TODO: floating and dock windows
+
         println!("config: {:?}", args);
 
         match args.command {
@@ -433,10 +500,10 @@ impl WindowManager {
                         let insert = self.config.insert.clone();
 
                         if self.focused(|_, screen| Ok(desktop < screen.desktops.len() && screen.current != desktop))? {
-                            self.unmanage(focus.id())?;
+                            let mode = self.unmanage(focus.id())?.map(|alt| alt.mode);
 
                             self.focused(move |_, screen| {
-                                screen.desktops[desktop].insert(focus.clone(), insert, Point::Any);
+                                screen.desktops[desktop].insert(focus.clone(), insert, Point::Any, mode);
 
                                 Ok(())
                             })?;
