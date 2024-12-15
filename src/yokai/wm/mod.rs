@@ -5,8 +5,9 @@ use crate::startup;
 use crate::server;
 
 use yaxi::display::{self, Display, Atom};
-use yaxi::window::{Window, WindowKind};
-use yaxi::proto::{Event, EventMask, EventKind, RevertTo, ClientMessageData};
+use yaxi::window::{Window, WindowKind, WindowArguments, ValuesBuilder};
+use yaxi::proto::{Event, EventMask, RevertTo, ClientMessageData, WindowClass};
+use yaxi::ewmh::DesktopViewport;
 
 use std::sync::Arc;
 use std::thread;
@@ -72,7 +73,7 @@ impl Desktop {
 
     pub fn map_internal<F>(&mut self, wid: impl Into<u32>, f: F)
     where
-        F: Clone + Copy + Fn(Box<Node>, Box<Node>, &Insert) -> Node
+        F: Clone + Copy + Fn(Box<Node>, Box<Node>, Insert) -> Node
     {
         if let Some(clients) = &mut self.clients {
             clients.map_internal(wid.into(), f);
@@ -89,9 +90,16 @@ impl Desktop {
         Ok(())
     }
 
-    pub fn tile(&self, padding: Padding) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn tile(&self, padding: Padding, gaps: u8) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(clients) = &self.clients {
-            clients.partition(self.area, padding)?;
+            let area = Area::new(
+                self.area.x + padding.left,
+                self.area.y + padding.top,
+                self.area.width - padding.left - padding.right,
+                self.area.height - padding.top - padding.bottom,
+            );
+
+            clients.partition(area, gaps)?;
         }
 
         Ok(())
@@ -146,16 +154,16 @@ impl Screen {
 
     pub fn map_internal<F>(&mut self, wid: impl Into<u32>, f: F)
     where
-        F: Clone + Copy + Fn(Box<Node>, Box<Node>, &Insert) -> Node
+        F: Clone + Copy + Fn(Box<Node>, Box<Node>, Insert) -> Node
     {
         if let Some(desktop) = self.desktops.get_mut(self.current) {
             desktop.map_internal(wid, f);
         }
     }
 
-    pub fn tile(&self, padding: Padding) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn tile(&self, padding: Padding, gaps: u8) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(desktop) = self.desktops.get(self.current) {
-            desktop.tile(padding)?;
+            desktop.tile(padding, gaps)?;
         }
 
         for (index, desktop) in self.desktops.iter().enumerate() {
@@ -190,6 +198,7 @@ pub struct WindowManager {
     screens: Vec<Screen>,
     config: Configuration,
     atoms: Atoms,
+    should_close: bool,
 }
 
 impl WindowManager {
@@ -214,6 +223,7 @@ impl WindowManager {
             screens: Vec::new(),
             config: Configuration::new(),
             atoms,
+            should_close: false,
         })
     }
 
@@ -223,6 +233,65 @@ impl WindowManager {
         for screen in xinerama.query_screens()? {
             self.screens.push(Screen::new(Area::new(screen.x, screen.y, screen.width, screen.height)));
         }
+
+        self.update_viewport()?;
+
+        Ok(())
+    }
+
+    fn update_viewport(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let viewport = self.screens.iter()
+            .map(|screen| DesktopViewport::new(screen.area.x as u32, screen.area.y as u32))
+            .collect::<Vec<DesktopViewport>>();
+
+        self.display
+            .use_ewmh(&self.root)
+            .set_desktop_viewport(&viewport)?;
+
+        Ok(())
+    }
+
+    fn set_supporting_ewmh(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let window = self.root.create_window(WindowArguments {
+            depth: self.root.depth(),
+            x: 0,
+            y: 0,
+            width: 1,
+            height: 1,
+            class: WindowClass::InputOutput,
+            border_width: 0,
+            visual: self.root.visual(),
+            values: ValuesBuilder::new(vec![]),
+        })?;
+
+        let ewmh = self.display.use_ewmh(&window);
+
+        ewmh.set_supporting_wm_check(window.id())?;
+
+        ewmh.set_wm_name("yokai")?;
+
+        let root = self.display.use_ewmh(&self.root);
+
+        root.set_supporting_wm_check(window.id())?;
+
+        // TODO: support for _NET_WM_STATE and _NET_WM_STATE_FULLSCREEN
+
+        root.set_supported(&[
+            self.display.intern_atom("WM_PROTOCOLS", false)?,
+            self.display.intern_atom("WM_DELETE_WINDOW", false)?,
+            self.display.intern_atom("_NET_ACTIVE_WINDOW", false)?,
+            self.display.intern_atom("_NET_NUMBER_OF_DESKTOPS", false)?,
+            self.display.intern_atom("_NET_CURRENT_DESKTOP", false)?,
+            self.display.intern_atom("_NET_WM_WINDOW_TYPE", false)?,
+            self.display.intern_atom("_NET_WM_WINDOW_TYPE_DESKTOP", false)?,
+            self.display.intern_atom("_NET_WM_WINDOW_TYPE_DOCK", false)?,
+            self.display.intern_atom("_NET_WM_WINDOW_TYPE_TOOLBAR", false)?,
+            self.display.intern_atom("_NET_WM_WINDOW_TYPE_MENU", false)?,
+            self.display.intern_atom("_NET_WM_WINDOW_TYPE_UTILITY", false)?,
+            self.display.intern_atom("_NET_WM_WINDOW_TYPE_SPLASH", false)?,
+            self.display.intern_atom("_NET_WM_WINDOW_TYPE_DIALOG", false)?,
+            self.display.intern_atom("_NET_WM_WINDOW_TYPE_NORMAL", false)?,
+        ])?;
 
         Ok(())
     }
@@ -238,21 +307,20 @@ impl WindowManager {
         Ok(())
     }
 
-    fn focused<F>(&mut self, mut f: F) -> Result<(), Box<dyn std::error::Error>>
+    fn focused<F, R>(&mut self, mut f: F) -> Result<R, Box<dyn std::error::Error>>
     where
-        F: FnMut(&mut Screen) -> Result<(), Box<dyn std::error::Error>>
+        F: FnMut(usize, &mut Screen) -> Result<R, Box<dyn std::error::Error>>,
+        R: Default,
     {
         let pointer = self.root.query_pointer()?;
 
-        for screen in self.screens.iter_mut() {
+        for (index, screen) in self.screens.iter_mut().enumerate() {
             if self.focus.as_ref().map(|focus| screen.contains(focus)).unwrap_or(screen.area.contains(pointer.root_x, pointer.root_y)) {
-                f(screen)?;
-
-                return Ok(());
+                return f(index, screen);
             }
         }
 
-        Ok(())
+        Ok(R::default())
     }
 
     fn map_focus<F>(&self, mut f: F) -> Result<(), Box<dyn std::error::Error>>
@@ -269,6 +337,23 @@ impl WindowManager {
         self.screens.iter().any(|screen| screen.contains(window))
     }
 
+    fn unmanage(&mut self, window: u32) -> Result<(), Box<dyn std::error::Error>> {
+        let padding = self.config.padding.clone();
+        let gaps = self.config.gaps.clone();
+
+        self.all(|_, screen| {
+            screen.remove(window);
+
+            screen.tile(padding, gaps)
+        })?;
+
+        if self.focus.as_ref().map(|window| window.id()) == Some(window) {
+            self.focus = None;
+        }
+
+        Ok(())
+    }
+
     fn handle_event(&mut self, event: Event) -> Result<(), Box<dyn std::error::Error>> {
         println!("event: {:?}", event);
 
@@ -278,8 +363,7 @@ impl WindowManager {
                 let window = self.display.window_from_id(window)?;
                 let insert = self.config.insert.clone();
                 let padding = self.config.padding.clone();
-
-                println!("[handle_event] map request");
+                let gaps = self.config.gaps.clone();
 
                 window.select_input(&[
                     EventMask::SubstructureNotify,
@@ -292,36 +376,21 @@ impl WindowManager {
 
                 window.set_border_width(self.config.border.width)?;
 
-                println!("[handle_event] trying to get focused");
-
-                self.focused(|screen| {
+                self.focused(|_, screen| {
                     screen.insert(window.clone(), insert.clone(), focus.clone().map(|focus| Point::Window(focus)).unwrap_or(Point::Any));
 
-                    println!("[handle_event] inserted");
-
-                    screen.tile(padding)
+                    screen.tile(padding, gaps)
                 })?;
-
-                println!("[handle_event] done");
             },
             Event::UnmapNotify { window, .. } => {
-                let padding = self.config.padding.clone();
-
-                self.all(|_, screen| {
-                    screen.remove(window);
-
-                    screen.tile(padding)
-                })?;
-
-                if self.focus.clone().map(|window| window.id()) == Some(window) {
-                    self.focus = None;
-                }
+                self.unmanage(window)?;
             },
             Event::EnterNotify { window, .. } => {
                 let window = self.display.window_from_id(window)?;
 
                 if self.is_managed(&window) && self.config.pf.focus_follows {
                     window.set_input_focus(RevertTo::Parent)?;
+
                 }
             },
             Event::FocusIn { window, .. } => {
@@ -346,11 +415,7 @@ impl WindowManager {
     }
 
     fn handle_config(&mut self, args: Arguments) -> Result<(), Box<dyn std::error::Error>> {
-        // TODO: we need to retile when we get commands that affect tiling
-
-        // TODO: we need to implement preselect and node selection
-
-        // TODO: we need to implement reverse binary tree
+        // TODO: we need to implement node selection
 
         println!("config: {:?}", args);
 
@@ -364,13 +429,26 @@ impl WindowManager {
                         .unwrap_or(insert);
                 },
                 NodeCommand::Desktop { desktop } => {
-                    // TODO: send the node to another desktop
+                    if let Some(focus) = self.focus.clone() {
+                        let insert = self.config.insert.clone();
+
+                        if self.focused(|_, screen| Ok(desktop < screen.desktops.len() && screen.current != desktop))? {
+                            self.unmanage(focus.id())?;
+
+                            self.focused(move |_, screen| {
+                                screen.desktops[desktop].insert(focus.clone(), insert, Point::Any);
+
+                                Ok(())
+                            })?;
+                        }
+                    }
                 },
                 NodeCommand::Ratio { change } => {
                     if let Some(focus) = self.focus.clone() {
                         let padding = self.config.padding.clone();
+                        let gaps = self.config.gaps.clone();
 
-                        self.focused(move |screen| {
+                        self.focused(move |_, screen| {
                             screen.map_internal(focus.id(), |left, right, insert| {
                                 Node::Internal {
                                     left,
@@ -386,7 +464,29 @@ impl WindowManager {
                                 }
                             });
 
-                            screen.tile(padding)
+                            screen.tile(padding, gaps)
+                        })?;
+                    }
+                },
+                NodeCommand::Reverse =>  {
+                    if let Some(focus) = self.focus.clone() {
+                        let padding = self.config.padding.clone();
+                        let gaps = self.config.gaps.clone();
+
+                        self.focused(move |_, screen| {
+                            screen.map_internal(focus.id(), |mut left, mut right, insert| {
+                                right.reverse();
+
+                                left.reverse();
+
+                                Node::Internal {
+                                    left: right,
+                                    right: left,
+                                    insert,
+                                }
+                            });
+
+                            screen.tile(padding, gaps)
                         })?;
                     }
                 },
@@ -420,19 +520,25 @@ impl WindowManager {
             Command::Desktop(desktop) => match desktop {
                 DesktopCommand::Focus { desktop } => {
                     let padding = self.config.padding.clone();
+                    let gaps = self.config.gaps.clone();
+                    let ewmh = self.display.use_ewmh(&self.root);
 
                     if self.config.desktops.pinned {
-                        self.focused(|screen| {
+                        self.focused(|index, screen| {
                             screen.current = desktop.min(screen.desktops.len());
 
-                            screen.tile(padding)
+                            ewmh.set_current_desktop((screen.current + screen.desktops.len() * index) as u32)?;
+
+                            screen.tile(padding, gaps)
                         })?;
                     } else {
                         self.all(|index, screen| {
                             if desktop > screen.desktops.len() * index {
                                 screen.current = (desktop - screen.desktops.len() * index).min(screen.desktops.len());
 
-                                screen.tile(padding)?;
+                                ewmh.set_current_desktop((screen.current + screen.desktops.len() * index) as u32)?;
+
+                                screen.tile(padding, gaps)?;
                             }
 
                             Ok(())
@@ -454,16 +560,31 @@ impl WindowManager {
 
                         Ok(())
                     })?;
+
+                    self.display
+                        .use_ewmh(&self.root)
+                        .set_number_of_desktops((length * self.screens.len()) as u32)?;
+
+                    self.update_viewport()?;
                 },
                 ConfigCommand::Window { gaps } => {
-                    self.config.window.gaps = gaps;
+                    let padding = self.config.padding.clone();
+
+                    self.config.gaps = gaps;
+
+                    self.all(|_, screen| screen.tile(padding, gaps))?;
                 },
                 ConfigCommand::Border { normal, focused, width } => {
+                    let padding = self.config.padding.clone();
+                    let gaps = self.config.gaps.clone();
+
                     self.config.border = crate::config::Border {
                         normal: u32::from_str_radix(&normal, 16)?,
                         focused: u32::from_str_radix(&focused, 16)?,
                         width,
                     };
+
+                    self.all(|_, screen| screen.tile(padding, gaps))?;
                 },
                 ConfigCommand::Padding { top, bottom, left, right } => {
                     self.config.padding = crate::config::Padding {
@@ -472,9 +593,17 @@ impl WindowManager {
                         left,
                         right,
                     };
+
+                    let padding = self.config.padding.clone();
+                    let gaps = self.config.gaps.clone();
+
+                    self.all(|_, screen| screen.tile(padding, gaps))?;
                 },
                 ConfigCommand::PointerFollowsFocus => self.config.pf.pointer_follows ^= true,
                 ConfigCommand::FocusFollowsPointer => self.config.pf.focus_follows ^= true,
+            },
+            Command::Exit => {
+                self.should_close = true;
             },
         }
 
@@ -487,6 +616,8 @@ impl WindowManager {
 
         self.load_screens()?;
 
+        self.set_supporting_ewmh()?;
+
         server::spawn(events.clone());
 
         thread::spawn(move || {
@@ -495,7 +626,7 @@ impl WindowManager {
 
         startup::startup()?;
 
-        loop {
+        while !self.should_close {
             match self.events.wait()? {
                 EventType::XEvent(event) => {
                     self.handle_event(event)?;
@@ -505,6 +636,8 @@ impl WindowManager {
                 },
             }
         }
+
+        Ok(())
     }
 }
 

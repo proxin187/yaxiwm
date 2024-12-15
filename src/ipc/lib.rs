@@ -47,6 +47,7 @@ pub enum NodeCommand {
         change: Change,
     },
 
+    Reverse,
     Close,
     Kill,
 }
@@ -110,6 +111,8 @@ pub enum Command {
 
     #[command(subcommand)]
     Config(ConfigCommand),
+
+    Exit,
 }
 
 #[derive(Debug, Parser, Serialize, Deserialize)]

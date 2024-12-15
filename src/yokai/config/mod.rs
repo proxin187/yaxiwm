@@ -1,7 +1,7 @@
 use ipc::Direction;
 
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Insert {
     pub dir: Direction,
     pub ratio: i8,
@@ -38,11 +38,6 @@ pub struct Desktops {
 }
 
 #[derive(Debug, Clone)]
-pub struct Window {
-    pub gaps: u8,
-}
-
-#[derive(Debug, Clone)]
 pub struct Border {
     pub normal: u32,
     pub focused: u32,
@@ -62,9 +57,9 @@ pub struct Configuration {
     pub insert: Insert,
     pub pf: PointerFocus,
     pub desktops: Desktops,
-    pub window: Window,
     pub border: Border,
     pub padding: Padding,
+    pub gaps: u8,
 }
 
 impl Configuration {
@@ -79,9 +74,6 @@ impl Configuration {
                 names: Vec::new(),
                 pinned: false,
             },
-            window: Window {
-                gaps: 0,
-            },
             border: Border {
                 normal: 0x000000ff,
                 focused: 0xffffffff,
@@ -93,6 +85,7 @@ impl Configuration {
                 left: 0,
                 right: 0,
             },
+            gaps: 0,
         }
     }
 }

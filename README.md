@@ -7,6 +7,12 @@ yokai is a manual tiling window manager where each window is represented as a le
  - Keyboard driven, (mouse is optional)
  - Small and consise code base.
 
+## Roadmap
+ - [X] Configuration over socket architecture
+ - [ ] EWMH Support
+ - [ ] Query Tree on startup
+ - [ ] Advanced node selection
+
 ## License
 
 yokai is licensed under the MIT License.

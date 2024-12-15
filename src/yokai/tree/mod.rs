@@ -11,7 +11,7 @@ pub enum Point {
     Any,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum Node {
     Leaf {
         window: Window,
@@ -58,14 +58,14 @@ impl Node {
         }
     }
 
-    pub fn partition(&self, area: Area, padding: Padding) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn partition(&self, area: Area, gaps: u8) -> Result<(), Box<dyn std::error::Error>> {
         match self {
             Node::Leaf { window } => {
                 window.mov_resize(
-                    area.x + padding.left,
-                    area.y - padding.top,
-                    area.width - padding.left - padding.right,
-                    area.height - padding.top - padding.bottom
+                    area.x + gaps as u16,
+                    area.y + gaps as u16,
+                    area.width - (gaps as u16 * 2),
+                    area.height - (gaps as u16 * 2),
                 )?;
 
                 window.map(WindowKind::Window)?;
@@ -75,14 +75,14 @@ impl Node {
 
                 match insert.dir {
                     Direction::North | Direction::South => {
-                        left.partition(Area::new(area.x, area.y, area.width, (area.height as f64 * factor) as u16), padding)?;
+                        left.partition(Area::new(area.x, area.y, area.width, (area.height as f64 * factor) as u16), gaps)?;
 
-                        right.partition(Area::new(area.x, area.y + (area.height as f64 * factor) as u16, area.width, area.height - (area.height as f64 * factor) as u16), padding)?;
+                        right.partition(Area::new(area.x, area.y + (area.height as f64 * factor) as u16, area.width, area.height - (area.height as f64 * factor) as u16), gaps)?;
                     },
                     Direction::West | Direction::East => {
-                        left.partition(Area::new(area.x, area.y, (area.width as f64 * factor) as u16, area.height), padding)?;
+                        left.partition(Area::new(area.x, area.y, (area.width as f64 * factor) as u16, area.height), gaps)?;
 
-                        right.partition(Area::new(area.x + (area.width as f64 * factor) as u16, area.y, area.width - (area.width as f64 * factor) as u16, area.height), padding)?;
+                        right.partition(Area::new(area.x + (area.width as f64 * factor) as u16, area.y, area.width - (area.width as f64 * factor) as u16, area.height), gaps)?;
                     },
                 }
             },
@@ -108,16 +108,29 @@ impl Node {
 
     pub fn map_internal<F>(&mut self, needle: u32, f: F) -> bool
     where
-        F: Clone + Copy + Fn(Box<Node>, Box<Node>, &Insert) -> Node
+        F: Clone + Copy + Fn(Box<Node>, Box<Node>, Insert) -> Node
     {
         match self {
             Node::Leaf { window } => window.id() == needle,
             Node::Internal { left, right, insert } => {
                 if left.map_internal(needle, f) || right.map_internal(needle, f) {
-                    *self = f(left.clone(), right.clone(), insert);
+                    *self = f(left.clone(), right.clone(), *insert);
                 }
 
                 false
+            },
+        }
+    }
+
+    pub fn reverse(&mut self) {
+        match self {
+            Node::Leaf { .. } => {},
+            Node::Internal { left, right, .. } => {
+                std::mem::swap(left, right);
+
+                left.reverse();
+
+                right.reverse();
             },
         }
     }
