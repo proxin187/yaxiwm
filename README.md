@@ -9,7 +9,7 @@ yokai is a manual tiling window manager where each window is represented as a le
 
 ## Roadmap
  - [X] Configuration over socket architecture
- - [ ] EWMH Support
+ - [X] EWMH Support
  - [ ] Query Tree on startup
  - [ ] Advanced node selection
 
