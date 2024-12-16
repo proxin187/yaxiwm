@@ -151,7 +151,10 @@ impl Desktop {
             clients.partition(area, gaps)?;
         }
 
-        // TODO: we need to show all the alt clients here
+        // this should map all alt window too, havent tested it yet
+        for alt in self.alt.iter() {
+            alt.window.map(WindowKind::Window)?;
+        }
 
         Ok(())
     }
