@@ -21,11 +21,12 @@ const FLOAT: [EwmhWindowType; 3] = [EwmhWindowType::Splash, EwmhWindowType::Util
 pub enum Mode {
     Float,
     Dock,
+    Tiled,
 }
 
 impl Mode {
     // sometimes you just feel like using functions for everything, who needs if statements anyway
-    fn from(types: &[EwmhWindowType]) -> Option<Mode> {
+    fn from(types: &[EwmhWindowType]) -> Mode {
         DOCK.iter()
             .any(|type_| types.contains(type_))
             .then(|| Mode::Dock)
@@ -34,8 +35,11 @@ impl Mode {
                     .any(|type_| types.contains(type_))
                     .then(|| Mode::Float)
             })
+            .unwrap_or(Mode::Tiled)
     }
 }
+
+
 
 #[derive(Clone, Copy)]
 pub struct Area {
@@ -60,24 +64,9 @@ impl Area {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct AltClient {
-    window: Window,
-    mode: Mode,
-}
-
-impl AltClient {
-    pub fn new(window: Window, mode: Mode) -> AltClient {
-        AltClient {
-            window,
-            mode,
-        }
-    }
-}
-
 pub struct Desktop {
     clients: Option<Node>,
-    alt: Vec<AltClient>,
+    floating: Vec<Window>,
     area: Area,
 }
 
@@ -85,7 +74,7 @@ impl Desktop {
     pub fn new(area: Area) -> Desktop {
         Desktop {
             clients: None,
-            alt: Vec::new(),
+            floating: Vec::new(),
             area,
         }
     }
@@ -97,27 +86,32 @@ impl Desktop {
         }
     }
 
-    pub fn insert(&mut self, window: Window, insert: Insert, point: Point, mode: Option<Mode>) {
-        if let Some(mode) = mode {
-            self.alt.push(AltClient::new(window, mode));
-        } else {
-            match &mut self.clients {
-                Some(clients) => clients.insert(window, insert, point),
-                None => self.clients = Some(Node::root(window)),
-            }
+    fn insert_tiled(&mut self, window: Window, insert: Insert, point: Point) {
+        match &mut self.clients {
+            Some(clients) => clients.insert(window, insert, point),
+            None => self.clients = Some(Node::root(window)),
         }
     }
 
-    pub fn remove(&mut self, wid: impl Into<u32>) -> Option<AltClient> {
+    pub fn insert(&mut self, window: Window, insert: Insert, point: Point, mode: Mode) {
+        match mode {
+            Mode::Float => self.floating.push(window),
+            Mode::Tiled => self.insert_tiled(window, insert, point),
+            Mode::Dock => {},
+        }
+    }
+
+    pub fn remove(&mut self, wid: impl Into<u32>) -> Option<Mode> {
         let wid = wid.into();
 
         if self.clients.as_mut().map(|clients| clients.remove(wid)).unwrap_or(false) {
             self.clients = None;
         }
 
-        self.alt.iter()
-            .position(|alt| alt.window.id() == wid)
-            .and_then(|index| (index < self.alt.len()).then(|| self.alt.remove(index)))
+        // TODO: FIX THIS IM NEVER DOING THIS AGAIN
+        self.floating.iter()
+            .position(|window| window.id() == wid)
+            .and_then(|index| (index < self.floating.len()).then(|| self.floating.remove(index)))
     }
 
     pub fn map_internal<F>(&mut self, wid: impl Into<u32>, f: F)
@@ -152,8 +146,8 @@ impl Desktop {
         }
 
         // this should map all alt window too, havent tested it yet
-        for alt in self.alt.iter() {
-            alt.window.map(WindowKind::Window)?;
+        for window in self.floating.iter() {
+            window.map(WindowKind::Window)?;
         }
 
         Ok(())
@@ -191,18 +185,18 @@ impl Screen {
                 .collect::<Vec<Window>>();
 
             for window in excess {
-                self.desktops[size - 1].insert(window, Insert::default(), Point::Any, None);
+                self.desktops[size - 1].insert(window, Insert::default(), Point::Any, Mode::Tiled);
             }
         }
     }
 
-    pub fn insert(&mut self, window: Window, insert: Insert, point: Point, mode: Option<Mode>) {
+    pub fn insert(&mut self, window: Window, insert: Insert, point: Point, mode: Mode) {
         if let Some(desktop) = self.desktops.get_mut(self.current) {
             desktop.insert(window, insert, point, mode);
         }
     }
 
-    pub fn remove(&mut self, wid: impl Into<u32>) -> Option<AltClient> {
+    pub fn remove(&mut self, wid: impl Into<u32>) -> Option<Mode> {
         self.desktops.get_mut(self.current)
             .and_then(|desktop| desktop.remove(wid))
     }
@@ -392,7 +386,7 @@ impl WindowManager {
         self.screens.iter().any(|screen| screen.contains(window))
     }
 
-    fn unmanage(&mut self, window: u32) -> Result<Option<AltClient>, Box<dyn std::error::Error>> {
+    fn unmanage(&mut self, window: u32) -> Result<Option<>, Box<dyn std::error::Error>> {
         let padding = self.config.padding.clone();
         let gaps = self.config.gaps.clone();
 
@@ -503,7 +497,11 @@ impl WindowManager {
                         let insert = self.config.insert.clone();
 
                         if self.focused(|_, screen| Ok(desktop < screen.desktops.len() && screen.current != desktop))? {
-                            let mode = self.unmanage(focus.id())?.map(|alt| alt.mode);
+                            let mode = self.unmanage(focus.id())?
+                                .map(|alt| alt.mode)
+                                ;
+
+                            // we need the mode when moving.
 
                             self.focused(move |_, screen| {
                                 screen.desktops[desktop].insert(focus.clone(), insert, Point::Any, mode);
