@@ -7,38 +7,12 @@ use crate::server;
 use yaxi::display::{self, Display, Atom};
 use yaxi::window::{Window, WindowKind, WindowArguments, ValuesBuilder};
 use yaxi::proto::{Event, EventMask, RevertTo, ClientMessageData, WindowClass};
-use yaxi::ewmh::{EwmhWindowType, DesktopViewport};
+use yaxi::ewmh::DesktopViewport;
 
 use std::sync::Arc;
 use std::thread;
 
-use ipc::{Arguments, Command, NodeCommand, DesktopCommand, ConfigCommand, Change};
-
-const DOCK: [EwmhWindowType; 3] = [EwmhWindowType::Dock, EwmhWindowType::Toolbar, EwmhWindowType::Menu];
-const FLOAT: [EwmhWindowType; 3] = [EwmhWindowType::Splash, EwmhWindowType::Utility, EwmhWindowType::Dialog];
-
-#[derive(Debug, Clone, Copy)]
-pub enum Mode {
-    Float,
-    Dock,
-    Tiled,
-}
-
-impl Mode {
-    // sometimes you just feel like using functions for everything, who needs if statements anyway
-    fn from(types: &[EwmhWindowType]) -> Mode {
-        DOCK.iter()
-            .any(|type_| types.contains(type_))
-            .then(|| Mode::Dock)
-            .or_else(|| {
-                FLOAT.iter()
-                    .any(|type_| types.contains(type_))
-                    .then(|| Mode::Float)
-            })
-            .unwrap_or(Mode::Tiled)
-    }
-}
-
+use ipc::{Arguments, Command, NodeCommand, DesktopCommand, ConfigCommand, Change, State};
 
 
 #[derive(Clone, Copy)]
@@ -81,8 +55,8 @@ impl Desktop {
 
     pub fn contains(&self, window: &Window) -> bool {
         match &self.clients {
-            Some(clients) => clients.contains(window),
-            None => false,
+            Some(clients) => clients.contains(window) || self.floating.contains(window),
+            None => self.floating.contains(window),
         }
     }
 
@@ -93,25 +67,28 @@ impl Desktop {
         }
     }
 
-    pub fn insert(&mut self, window: Window, insert: Insert, point: Point, mode: Mode) {
-        match mode {
-            Mode::Float => self.floating.push(window),
-            Mode::Tiled => self.insert_tiled(window, insert, point),
-            Mode::Dock => {},
+    pub fn insert(&mut self, window: Window, insert: Insert, point: Point, state: State) {
+        match state {
+            State::Float => self.floating.push(window),
+            State::Tiled => self.insert_tiled(window, insert, point),
+            State::Dock => {},
         }
     }
 
-    pub fn remove(&mut self, wid: impl Into<u32>) -> Option<Mode> {
+    pub fn remove(&mut self, wid: impl Into<u32>) -> State {
         let wid = wid.into();
 
         if self.clients.as_mut().map(|clients| clients.remove(wid)).unwrap_or(false) {
             self.clients = None;
         }
 
-        // TODO: FIX THIS IM NEVER DOING THIS AGAIN
         self.floating.iter()
             .position(|window| window.id() == wid)
-            .and_then(|index| (index < self.floating.len()).then(|| self.floating.remove(index)))
+            .and_then(|index| {
+                (index < self.floating.len())
+                    .then(|| { self.floating.remove(index); State::Float })
+            })
+            .unwrap_or(State::Tiled)
     }
 
     pub fn map_internal<F>(&mut self, wid: impl Into<u32>, f: F)
@@ -130,6 +107,10 @@ impl Desktop {
             })?;
         }
 
+        for window in self.floating.iter() {
+            window.unmap(WindowKind::Window)?;
+        }
+
         Ok(())
     }
 
@@ -145,9 +126,10 @@ impl Desktop {
             clients.partition(area, gaps)?;
         }
 
-        // this should map all alt window too, havent tested it yet
         for window in self.floating.iter() {
             window.map(WindowKind::Window)?;
+
+            window.raise()?;
         }
 
         Ok(())
@@ -177,7 +159,7 @@ impl Screen {
         if size >= self.desktops.len() {
             self.desktops.resize_with(size, || Desktop::new(self.area));
         } else {
-            // TODO: we also need to collect alt
+            // TODO: we also need to collect floating
 
             let excess = self.desktops.drain(size..self.desktops.len())
                 .filter_map(|desktop| desktop.clients)
@@ -185,20 +167,19 @@ impl Screen {
                 .collect::<Vec<Window>>();
 
             for window in excess {
-                self.desktops[size - 1].insert(window, Insert::default(), Point::Any, Mode::Tiled);
+                self.desktops[size - 1].insert(window, Insert::default(), Point::Any, State::Tiled);
             }
         }
     }
 
-    pub fn insert(&mut self, window: Window, insert: Insert, point: Point, mode: Mode) {
+    pub fn insert(&mut self, window: Window, insert: Insert, point: Point, state: State) {
         if let Some(desktop) = self.desktops.get_mut(self.current) {
-            desktop.insert(window, insert, point, mode);
+            desktop.insert(window, insert, point, state);
         }
     }
 
-    pub fn remove(&mut self, wid: impl Into<u32>) -> Option<Mode> {
-        self.desktops.get_mut(self.current)
-            .and_then(|desktop| desktop.remove(wid))
+    pub fn remove(&mut self, wid: impl Into<u32>) -> State {
+        self.desktops[self.current].remove(wid)
     }
 
     pub fn map_internal<F>(&mut self, wid: impl Into<u32>, f: F)
@@ -372,6 +353,8 @@ impl WindowManager {
         Ok(R::default())
     }
 
+    // TODO: we should be able to remove this function as focus should never be root because we
+    // only allow windows that are managed by us to become focused
     fn map_focus<F>(&self, mut f: F) -> Result<(), Box<dyn std::error::Error>>
     where
         F: FnMut(&Window) -> Result<(), Box<dyn std::error::Error>>
@@ -384,25 +367,6 @@ impl WindowManager {
 
     fn is_managed(&self, window: &Window) -> bool {
         self.screens.iter().any(|screen| screen.contains(window))
-    }
-
-    fn unmanage(&mut self, window: u32) -> Result<Option<>, Box<dyn std::error::Error>> {
-        let padding = self.config.padding.clone();
-        let gaps = self.config.gaps.clone();
-
-        self.all(|_, screen| {
-            screen.remove(window);
-
-            screen.tile(padding, gaps)
-        })?;
-
-        if self.focus.as_ref().map(|window| window.id()) == Some(window) {
-            self.focus = None;
-        }
-
-        self.focused(|_, screen| {
-            Ok(screen.remove(window))
-        })
     }
 
     fn handle_event(&mut self, event: Event) -> Result<(), Box<dyn std::error::Error>> {
@@ -438,21 +402,31 @@ impl WindowManager {
                         focus.clone()
                             .map(|focus| Point::Window(focus))
                             .unwrap_or(Point::Any),
-                        Mode::from(&types),
+                        State::from(&types),
                     );
 
                     screen.tile(padding, gaps)
                 })?;
             },
             Event::UnmapNotify { window, .. } => {
-                self.unmanage(window)?;
+                let padding = self.config.padding.clone();
+                let gaps = self.config.gaps.clone();
+
+                self.all(|_, screen| {
+                    screen.remove(window);
+
+                    screen.tile(padding, gaps)
+                })?;
+
+                if self.focus.as_ref().map(|window| window.id()) == Some(window) {
+                    self.focus = None;
+                }
             },
             Event::EnterNotify { window, .. } => {
                 let window = self.display.window_from_id(window)?;
 
                 if self.is_managed(&window) && self.config.pf.focus_follows {
                     window.set_input_focus(RevertTo::Parent)?;
-
                 }
             },
             Event::FocusIn { window, .. } => {
@@ -461,7 +435,11 @@ impl WindowManager {
                 if self.is_managed(&window) {
                     window.set_border_pixel(self.config.border.focused)?;
 
-                    window.raise()?;
+                    // TODO: we need to make sure that floating windows stay on top, even when we
+                    // raise the focused window
+                    //
+                    // we should not need to raise it
+                    // window.raise()?;
 
                     if let Some(focus) = self.focus.replace(window.clone()) {
                         if focus.id() != window.id() {
@@ -477,9 +455,13 @@ impl WindowManager {
     }
 
     fn handle_config(&mut self, args: Arguments) -> Result<(), Box<dyn std::error::Error>> {
-        // TODO: we need to implement node selection
-
-        // TODO: floating and dock windows
+        // TODO: we need to implement node selection, right now we automatically select the focused
+        // node but we want to make it possible for the user to e.g. select the brother node,
+        // parent node and so on.
+        //
+        // this should be a priority before we implement more.
+        //
+        // we will have to implement every selector that bspwm supports.
 
         println!("config: {:?}", args);
 
@@ -492,22 +474,50 @@ impl WindowManager {
                         .then(|| Insert::default())
                         .unwrap_or(insert);
                 },
-                NodeCommand::Desktop { desktop } => {
+                NodeCommand::Move { dx, dy } => {
+                    // TODO: support negative numbers
+                    if let Some(focus) = self.focus.clone() {
+                        let geometry = focus.get_geometry()?;
+
+                        focus.mov((geometry.x as i32 + dx).max(0) as u16, (geometry.y as i32 + dy).max(0) as u16)?;
+                    }
+                },
+                NodeCommand::State { state, toggle } => {
                     if let Some(focus) = self.focus.clone() {
                         let insert = self.config.insert.clone();
+                        let padding = self.config.padding.clone();
+                        let gaps = self.config.gaps.clone();
 
+                        self.focused(|_, screen| {
+                            if screen.remove(focus.id()) == state && toggle {
+                                screen.insert(focus.clone(), insert, Point::Any, state.toggle());
+                            } else {
+                                screen.insert(focus.clone(), insert, Point::Any, state);
+                            }
+
+                            screen.tile(padding, gaps)
+                        })?;
+                    }
+                },
+                NodeCommand::Desktop { desktop } => {
+                    if let Some(focus) = self.focus.clone() {
                         if self.focused(|_, screen| Ok(desktop < screen.desktops.len() && screen.current != desktop))? {
-                            let mode = self.unmanage(focus.id())?
-                                .map(|alt| alt.mode)
-                                ;
-
-                            // we need the mode when moving.
+                            let insert = self.config.insert.clone();
+                            let padding = self.config.padding.clone();
+                            let gaps = self.config.gaps.clone();
+                            let wid = focus.id();
 
                             self.focused(move |_, screen| {
-                                screen.desktops[desktop].insert(focus.clone(), insert, Point::Any, mode);
+                                let state = screen.remove(wid);
 
-                                Ok(())
+                                screen.desktops[desktop].insert(focus.clone(), insert, Point::Any, state);
+
+                                screen.tile(padding, gaps)
                             })?;
+
+                            if self.focus.as_ref().map(|window| window.id()) == Some(wid) {
+                                self.focus = None;
+                            }
                         }
                     }
                 },

@@ -1,6 +1,39 @@
+use yaxi::ewmh::EwmhWindowType;
 use serde::{Serialize, Deserialize};
 use clap::{Parser, Subcommand};
 
+const DOCK: [EwmhWindowType; 3] = [EwmhWindowType::Dock, EwmhWindowType::Toolbar, EwmhWindowType::Menu];
+const FLOAT: [EwmhWindowType; 3] = [EwmhWindowType::Splash, EwmhWindowType::Utility, EwmhWindowType::Dialog];
+
+
+#[derive(Debug, Clone, Copy, PartialEq, Subcommand, Serialize, Deserialize)]
+pub enum State {
+    Float,
+    Dock,
+    Tiled,
+}
+
+impl State {
+    pub fn from(types: &[EwmhWindowType]) -> State {
+        DOCK.iter()
+            .any(|type_| types.contains(type_))
+            .then(|| State::Dock)
+            .or_else(|| {
+                FLOAT.iter()
+                    .any(|type_| types.contains(type_))
+                    .then(|| State::Float)
+            })
+            .unwrap_or(State::Tiled)
+    }
+
+    pub fn toggle(self) -> State {
+        match self {
+            State::Float => State::Tiled,
+            State::Tiled => State::Float,
+            State::Dock => State::Dock,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Subcommand, Serialize, Deserialize)]
 pub enum Direction {
@@ -38,9 +71,23 @@ pub enum NodeCommand {
         #[arg(short, long)]
         toggle: bool,
     },
+    State {
+        #[command(subcommand)]
+        state: State,
+
+        #[arg(short, long)]
+        toggle: bool,
+    },
     Desktop {
         #[arg(value_name = "DESKTOP")]
         desktop: usize,
+    },
+    Move {
+        #[arg(short, long)]
+        dx: i32,
+
+        #[arg(short, long)]
+        dy: i32,
     },
     Ratio {
         #[command(subcommand)]
