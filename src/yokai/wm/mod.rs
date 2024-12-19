@@ -435,12 +435,6 @@ impl WindowManager {
                 if self.is_managed(&window) {
                     window.set_border_pixel(self.config.border.focused)?;
 
-                    // TODO: we need to make sure that floating windows stay on top, even when we
-                    // raise the focused window
-                    //
-                    // we should not need to raise it
-                    // window.raise()?;
-
                     if let Some(focus) = self.focus.replace(window.clone()) {
                         if focus.id() != window.id() {
                             focus.set_border_pixel(self.config.border.normal)?;
@@ -462,11 +456,19 @@ impl WindowManager {
         // this should be a priority before we implement more.
         //
         // we will have to implement every selector that bspwm supports.
+        //
+        // we need a function that takes a selector and returns a node if it exists
+        //
+        // TODO: we can represent floating windows as a part of the tree to, how we do this is that
+        // we only only split the area if neither of the leafs are floating
+        //
+        // TODO: we might have to implement our own argument parser as clap is so bad it doesnt
+        // even support recursive argument structures
 
         println!("config: {:?}", args);
 
         match args.command {
-            Command::Node(node) => match node {
+            Command::Node { node, selector } => match node {
                 NodeCommand::Insert { dir, ratio, toggle } => {
                     let insert = Insert::new(dir, ratio.unwrap_or(self.config.insert.ratio));
 

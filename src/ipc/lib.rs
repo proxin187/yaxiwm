@@ -1,6 +1,6 @@
 use yaxi::ewmh::EwmhWindowType;
 use serde::{Serialize, Deserialize};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, Args, ValueEnum};
 
 const DOCK: [EwmhWindowType; 3] = [EwmhWindowType::Dock, EwmhWindowType::Toolbar, EwmhWindowType::Menu];
 const FLOAT: [EwmhWindowType; 3] = [EwmhWindowType::Splash, EwmhWindowType::Utility, EwmhWindowType::Dialog];
@@ -148,10 +148,51 @@ pub enum ConfigCommand {
     FocusFollowsPointer,
 }
 
+#[derive(Debug, Clone, ValueEnum, Serialize, Deserialize)]
+pub enum Descriptor {
+    Any,
+    FirstAncestor,
+    Last,
+    Newest,
+    Older,
+    Newer,
+    Focused,
+    Biggest,
+    Smallest,
+}
+
+#[derive(Debug, Clone, ValueEnum, Serialize, Deserialize)]
+pub enum Modifier {
+    Focused,
+    Active,
+    Local,
+    Leaf,
+    Tiled,
+    Floating,
+    Fullscreen,
+}
+
+#[derive(Debug, Clone, Args, Serialize, Deserialize)]
+pub struct Selector {
+    #[command(flatten)]
+    reference: Option<Box<Selector>>,
+
+    #[arg(value_enum)]
+    descriptor: Descriptor,
+
+    #[arg(value_enum)]
+    modifier: Modifier,
+}
+
 #[derive(Debug, Clone, Subcommand, Serialize, Deserialize)]
 pub enum Command {
-    #[command(subcommand)]
-    Node(NodeCommand),
+    Node {
+        #[command(subcommand)]
+        node: NodeCommand,
+
+        #[command(flatten)]
+        selector: Selector,
+    },
 
     #[command(subcommand)]
     Desktop(DesktopCommand),
