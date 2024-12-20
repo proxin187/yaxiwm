@@ -461,9 +461,6 @@ impl WindowManager {
         //
         // TODO: we can represent floating windows as a part of the tree to, how we do this is that
         // we only only split the area if neither of the leafs are floating
-        //
-        // TODO: we might have to implement our own argument parser as clap is so bad it doesnt
-        // even support recursive argument structures
 
         println!("config: {:?}", args);
 

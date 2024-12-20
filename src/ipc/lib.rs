@@ -149,6 +149,14 @@ pub enum ConfigCommand {
 }
 
 #[derive(Debug, Clone, ValueEnum, Serialize, Deserialize)]
+pub enum Jump {
+    First,
+    Second,
+    Brother,
+    Parent,
+}
+
+#[derive(Debug, Clone, ValueEnum, Serialize, Deserialize)]
 pub enum Descriptor {
     Any,
     FirstAncestor,
@@ -170,18 +178,20 @@ pub enum Modifier {
     Tiled,
     Floating,
     Fullscreen,
+    DescententOf,
+    AncestorOf,
 }
 
 #[derive(Debug, Clone, Args, Serialize, Deserialize)]
 pub struct Selector {
-    #[command(flatten)]
-    reference: Option<Box<Selector>>,
-
     #[arg(value_enum)]
     descriptor: Descriptor,
 
     #[arg(value_enum)]
     modifier: Modifier,
+
+    #[arg(long, short)]
+    path: Vec<Jump>,
 }
 
 #[derive(Debug, Clone, Subcommand, Serialize, Deserialize)]
